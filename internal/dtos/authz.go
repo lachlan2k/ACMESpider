@@ -1,5 +1,14 @@
 package dtos
 
+const (
+	AuthzStatusPending     = "pending"
+	AuthzStatusValid       = "valid"
+	AuthzStatusInvalid     = "invalid"
+	AuthzStatusDeactivated = "deactivated"
+	AuthzStatusExpired     = "expired"
+	AuthzStatusRevoked     = "revoked"
+)
+
 type AuthzCreateRequestDTO struct {
 	Identifier AuthzIdentifierDTO `json:"identifier"`
 }

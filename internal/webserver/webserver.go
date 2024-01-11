@@ -77,6 +77,8 @@ func Listen(port string) {
 		LinkCtrl:  l,
 	}
 
+	acmeAPI.Use(h.AddIndexLinkMw)
+
 	acmeAPI.GET(l.NewNoncePath().Relative(), h.GetNonce, h.AddNonceMw)
 	acmeAPI.HEAD(l.NewNoncePath().Relative(), h.GetNonce, h.AddNonceMw)
 	acmeAPI.GET(l.DirectoryPath().Relative(), h.GetDirectory)

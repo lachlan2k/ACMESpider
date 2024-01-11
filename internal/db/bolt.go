@@ -15,10 +15,12 @@ type BoltDB struct {
 }
 
 var (
-	ordersBucketName      = []byte("acme_orders")
-	accountsBucketName    = []byte("acme_accounts")
-	accountEabsBucketName = []byte("acme_account_eabs")
-	accountKeysBucketName = []byte("acme_account_keys")
+	ordersBucketName       = []byte("acme_orders")
+	accountsBucketName     = []byte("acme_accounts")
+	accountEabsBucketName  = []byte("acme_account_eabs")
+	accountKeysBucketName  = []byte("acme_account_keys")
+	authzsBucketName       = []byte("acme_authzs")
+	certificatesBucketName = []byte("acme_certificates")
 )
 
 var ErrNotFound = errors.New("not found")
@@ -28,7 +30,7 @@ func IsErrNotFound(err error) bool {
 }
 
 func (b BoltDB) Seed() error {
-	bucketsToCreate := [][]byte{accountEabsBucketName, ordersBucketName, accountsBucketName, accountKeysBucketName}
+	bucketsToCreate := [][]byte{accountEabsBucketName, ordersBucketName, accountsBucketName, accountKeysBucketName, authzsBucketName, certificatesBucketName}
 
 	return b.db.Update(func(tx *bolt.Tx) error {
 		for _, bucket := range bucketsToCreate {
@@ -216,6 +218,82 @@ func (b BoltDB) CreateOrder(order DBOrder) error {
 }
 func (b BoltDB) UpdateOrder(orderID []byte, updateCallback func(*DBOrder) error) (*DBOrder, error) {
 	return boltUpdator[DBOrder](b.db, ordersBucketName, orderID, updateCallback)
+}
+
+func (b *BoltDB) CreateCertificate(cert DBCertificate) error {
+	return boltSaver[DBCertificate](b.db, certificatesBucketName, []byte(cert.ID), &cert)
+}
+func (b *BoltDB) GetCertificate(certID []byte) (*DBCertificate, error) {
+	return boltGetter[DBCertificate](b.db, certificatesBucketName, certID)
+}
+
+func (b *BoltDB) CreateAuthz(authz DBAuthz) error {
+	return boltSaver[DBAuthz](b.db, authzsBucketName, []byte(authz.ID), &authz)
+}
+
+// IsAuthzLocked implements DB.
+func (b *BoltDB) IsAuthzLocked(authzID []byte) (bool, error) {
+	authz, err := boltGetter[DBAuthz](b.db, authzsBucketName, authzID)
+	if err != nil {
+		return false, err
+	}
+	return authz.Locked, nil
+}
+
+func (b *BoltDB) TryTakeAuthzLock(authzID []byte) (bool, error) {
+	success := false
+	err := b.db.Update(func(tx *bolt.Tx) error {
+		bucket, err := boltGetBucket(tx, authzsBucketName)
+		if err != nil {
+			return err
+		}
+
+		v := bucket.Get(authzID)
+		if v == nil {
+			return ErrNotFound
+		}
+
+		var authz DBAuthz
+		err = json.Unmarshal(v, &authz)
+		if err != nil {
+			return err
+		}
+
+		if authz.Locked {
+			success = false
+			return nil
+		}
+		authz.Locked = true
+		newV, err := json.Marshal(authz)
+		if err != nil {
+			success = false
+			return nil
+		}
+
+		err = bucket.Put(authzID, newV)
+		if err != nil {
+			success = false
+			return nil
+		}
+
+		success = true
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return success, nil
+}
+
+func (b *BoltDB) UnlockAuthz(authzID []byte) error {
+	_, err := boltUpdator[DBAuthz](b.db, authzsBucketName, authzID, func(authz *DBAuthz) error {
+		authz.Locked = false
+		return nil
+	})
+	return err
+}
+func (b *BoltDB) UpdateAuthz(authzID []byte, updateCallback func(authzToUpdate *DBAuthz) error) (*DBAuthz, error) {
+	return boltUpdator[DBAuthz](b.db, authzsBucketName, authzID, updateCallback)
 }
 
 func NewBoltDb(path string) (DB, error) {

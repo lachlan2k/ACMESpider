@@ -2,6 +2,8 @@ package dtos
 
 const (
 	OrderStatusPending = "pending"
+	OrderStatusValid   = "valid"
+	OrderStatusReady   = "ready"
 )
 
 type OrderCreateRequestDTO struct {

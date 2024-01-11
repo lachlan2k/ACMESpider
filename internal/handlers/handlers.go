@@ -4,6 +4,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"time"
@@ -85,7 +86,6 @@ func (h Handlers) NewAccount(c echo.Context) error {
 	}
 
 	c.Request().Header.Set("Location", h.LinkCtrl.AccountPath(newId).Abs())
-	h.addLink(c, h.LinkCtrl.DirectoryPath().Abs(), "index")
 
 	return c.JSON(http.StatusCreated, h.dbAccountToDTO(&accToCreate))
 }
@@ -108,7 +108,7 @@ func (h Handlers) GetOrUpdateAccount(c echo.Context) error {
 	if err != nil {
 		return util.GenericServerErr(err)
 	}
-	accIDParam := c.Param("accID")
+	accIDParam := c.Param(h.LinkCtrl.AccountIDParam())
 	if accIDParam == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "accID is empty")
 	}
@@ -189,10 +189,18 @@ func (h Handlers) NewOrder(c echo.Context) error {
 		return util.GenericServerErr(err)
 	}
 
-	// TODO: validate paramters like nbf, na?
-
 	dbIdentifiers := make([]db.DBOrderIdentifier, len(newOrderPayload.Identifiers))
 	for i, identifier := range newOrderPayload.Identifiers {
+		if identifier.Value == "" {
+			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("identifier index %d has an empty value", i))
+		}
+
+		// TODO: here, decide if a client is/isn't allowed to create a specific Value
+
+		if identifier.Type != "dns" {
+			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("identifier index %d had a type of %q, but the only supported type is \"dns\"", i, identifier.Type))
+		}
+
 		dbIdentifiers[i] = db.DBOrderIdentifier{
 			Type:  identifier.Type,
 			Value: identifier.Value,
@@ -208,12 +216,14 @@ func (h Handlers) NewOrder(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid NotAfter date format")
 	}
 
+	expires := time.Now().Add(2 * time.Minute)
+
 	dbOrder := db.DBOrder{
 		ID:        newId,
 		AccountID: string(accountID),
 
 		Status:  dtos.OrderStatusPending,
-		Expires: time.Now().Add(time.Hour).Unix(), // Todo more robust and goodness
+		Expires: expires.Unix(),
 
 		NotBefore: nbf.Unix(),
 		NotAfter:  naft.Unix(),
@@ -230,6 +240,7 @@ func (h Handlers) NewOrder(c echo.Context) error {
 	}
 
 	// TODO create authzs?
+	c.Request().Header.Set("Location", h.LinkCtrl.OrderPath(newId).Abs())
 
 	return c.JSON(http.StatusCreated, dtos.OrderResponseDTO{
 		Status:            dbOrder.Status,
@@ -244,11 +255,57 @@ func (h Handlers) NewOrder(c echo.Context) error {
 }
 
 func (h Handlers) GetOrder(c echo.Context) error {
-	return echo.ErrNotImplemented
+	orderID := c.Param(h.LinkCtrl.OrderIDParam())
+	if orderID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "no order ID")
+	}
+	accountID, err := getAccountID(c)
+	if err != nil {
+		return util.GenericServerErr(err)
+	}
+
+	order, err := h.DB.GetOrder([]byte(orderID))
+	if err != nil {
+		if db.IsErrNotFound(err) {
+			return echo.ErrUnauthorized
+		}
+		return util.GenericServerErr(err)
+	}
+
+	if order.AccountID != string(accountID) {
+		return echo.ErrUnauthorized
+	}
+
+	return c.JSON(http.StatusOK, h.dbOrderToDTO(order))
 }
 
 func (h Handlers) GetOrdersByAccountID(c echo.Context) error {
-	return echo.ErrNotImplemented
+	paramAccountID := c.Param(h.LinkCtrl.AccountIDParam())
+	if paramAccountID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "no account ID")
+	}
+	accountID, err := getAccountID(c)
+	if err != nil {
+		return util.GenericServerErr(err)
+	}
+
+	if string(accountID) != paramAccountID {
+		return echo.ErrUnauthorized
+	}
+
+	account, err := h.DB.GetAccount(accountID)
+	if err != nil {
+		return util.GenericServerErr(err)
+	}
+
+	orders := []string{}
+	for _, order := range account.Orders {
+		orders = append(orders, h.LinkCtrl.OrderPath(order).Abs())
+	}
+
+	return c.JSON(http.StatusOK, dtos.OrdersListResponseDTO{
+		Orders: orders,
+	})
 }
 
 func (h Handlers) FinalizeOrder(c echo.Context) error {
@@ -260,7 +317,28 @@ func (h Handlers) FinalizeOrder(c echo.Context) error {
 		return echo.ErrBadRequest
 	}
 
-	// TODO access control
+	orderID := c.Param(h.LinkCtrl.OrderIDParam())
+	if orderID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "no order ID")
+	}
+
+	accountID, err := getAccountID(c)
+	if err != nil {
+		return util.GenericServerErr(err)
+	}
+
+	order, err := h.DB.GetOrder([]byte(orderID))
+	if err != nil {
+		if db.IsErrNotFound(err) {
+			return echo.ErrUnauthorized
+		}
+		return util.GenericServerErr(err)
+	}
+
+	if string(accountID) != order.AccountID {
+		return echo.ErrUnauthorized
+	}
+
 	derCSR, err := base64.URLEncoding.DecodeString(finaliseRequestBody.CSRB64)
 	if err != nil {
 		return echo.ErrBadRequest
@@ -271,15 +349,85 @@ func (h Handlers) FinalizeOrder(c echo.Context) error {
 		return echo.ErrBadRequest
 	}
 
-	_, err = h.Client.Certificate.ObtainForCSR(certificate.ObtainForCSRRequest{
-		CSR: csr,
-		// TODO: grab NBF, etc, etc from from the order
+	obtainResult, err := h.Client.Certificate.ObtainForCSR(certificate.ObtainForCSRRequest{
+		CSR:       csr,
+		NotBefore: time.Unix(order.NotBefore, 0),
+		NotAfter:  time.Unix(order.NotAfter, 0),
+		// TODO what to do with the other params in this struct?
 	})
 	if err != nil {
 		return util.ServerError("failed to obtain certificate", err)
 	}
 
-	return echo.ErrNotImplemented
+	certID, err := util.GenerateID()
+	if err != nil {
+		return util.GenericServerErr(err)
+	}
+
+	if len(obtainResult.Certificate) == 0 {
+		return util.GenericServerErr(fmt.Errorf("obtained certificate is empty: %v", obtainResult))
+	}
+
+	_, err = x509.ParseCertificate(obtainResult.Certificate)
+	if err != nil {
+		return util.GenericServerErr(fmt.Errorf("obtained certificate is invalid: %v", err))
+	}
+	_, err = x509.ParseCertificate(obtainResult.IssuerCertificate)
+	if len(obtainResult.IssuerCertificate) > 0 && err != nil {
+		return util.GenericServerErr(fmt.Errorf("obtained issuer certificate is inl"))
+	}
+
+	newCert := db.DBCertificate{
+		ID:                certID,
+		OrderID:           order.ID,
+		AccountID:         order.AccountID,
+		CertificateDER:    obtainResult.Certificate,
+		IssuerCertificate: obtainResult.IssuerCertificate,
+	}
+
+	err = h.DB.CreateCertificate(newCert)
+	if err != nil {
+		return util.GenericServerErr(err)
+	}
+
+	newOrder, err := h.DB.UpdateOrder([]byte(order.ID), func(orderToUpdate *db.DBOrder) error {
+		orderToUpdate.CertificateID = certID
+		orderToUpdate.Status = dtos.OrderStatusValid
+		return nil
+	})
+	if err != nil {
+		return util.GenericServerErr(err)
+	}
+
+	c.Request().Header.Set("Location", h.LinkCtrl.OrderPath(order.ID).Abs())
+
+	return c.JSON(http.StatusOK, h.dbOrderToDTO(newOrder))
+}
+
+func (h Handlers) dbOrderToDTO(order *db.DBOrder) dtos.OrderResponseDTO {
+	identifiers := make([]dtos.OrderIdentifierDTO, len(order.Identifiers))
+	for i, identifier := range order.Identifiers {
+		identifiers[i] = dtos.OrderIdentifierDTO{
+			Type:  identifier.Type,
+			Value: identifier.Value,
+		}
+	}
+
+	authzURLs := make([]string, len(order.AuthzIDs))
+	for i, authzID := range order.AuthzIDs {
+		authzURLs[i] = h.LinkCtrl.AuthzPath(authzID).Abs()
+	}
+
+	return dtos.OrderResponseDTO{
+		Status:            order.Status,
+		Expires:           time.Unix(order.Expires, 0).Format(time.RFC3339),
+		NotBefore:         time.Unix(order.NotBefore, 0).Format(time.RFC3339),
+		NotAfter:          time.Unix(order.NotAfter, 0).Format(time.RFC3339),
+		Identifiers:       identifiers,
+		AuthorizationURLs: authzURLs,
+		FinalizeURL:       h.LinkCtrl.FinalizeOrderPath(order.ID).Abs(),
+		CertificateURL:    h.LinkCtrl.CertPath(order.CertificateID).Abs(),
+	}
 }
 
 func (h Handlers) GetAuthorization(c echo.Context) error {
@@ -287,13 +435,87 @@ func (h Handlers) GetAuthorization(c echo.Context) error {
 }
 
 func (h Handlers) GetChallenge(c echo.Context) error {
+	payloadBody, err := getPayloadBody(c)
+	if err != nil {
+		return util.GenericServerErr(err)
+	}
+	if string(payloadBody) != "{}" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Expected empty JSON object ({}) for payload")
+	}
+
 	return echo.ErrNotImplemented
 }
 
 func (h Handlers) GetCertificate(c echo.Context) error {
-	return echo.ErrNotImplemented
+	accountID, err := getAccountID(c)
+	if err != nil {
+		return util.GenericServerErr(err)
+	}
+	certID := c.Param(h.LinkCtrl.CertIDParam())
+	if len(certID) == 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "Empty certificate ID")
+	}
+
+	cert, err := h.DB.GetCertificate([]byte(certID))
+	if err != nil {
+		if db.IsErrNotFound(err) {
+			return echo.ErrUnauthorized
+		}
+		return util.GenericServerErr(err)
+	}
+	if cert == nil {
+		return echo.ErrUnauthorized
+	}
+	if cert.AccountID != string(accountID) {
+		return echo.ErrUnauthorized
+	}
+
+	pemOutput := []byte{}
+	pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: cert.CertificateDER,
+	})
+	if len(cert.IssuerCertificate) > 0 {
+		pemOutput = append(pemOutput, pem.EncodeToMemory(&pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: cert.IssuerCertificate,
+		})...)
+	}
+
+	return c.Blob(http.StatusOK, "application/pem-certificate-chain", pemOutput)
 }
 
 func (h Handlers) RevokeCert(c echo.Context) error {
+	_, internalErr, userErr := getPayloadBoundBody[dtos.RevokeCertRequestDTO](c)
+	if internalErr != nil {
+		return util.GenericServerErr(internalErr)
+	}
+	if userErr != nil {
+		return echo.ErrBadRequest
+	}
+
+	accountID, err := getAccountID(c)
+	if err != nil {
+		return util.GenericServerErr(err)
+	}
+	certID := c.Param(h.LinkCtrl.CertIDParam())
+	if len(certID) == 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "Empty certificate ID")
+	}
+
+	cert, err := h.DB.GetCertificate([]byte(certID))
+	if err != nil {
+		if db.IsErrNotFound(err) {
+			return echo.ErrUnauthorized
+		}
+		return util.GenericServerErr(err)
+	}
+	if cert == nil {
+		return echo.ErrUnauthorized
+	}
+	if cert.AccountID != string(accountID) {
+		return echo.ErrUnauthorized
+	}
+
 	return echo.ErrNotImplemented
 }
