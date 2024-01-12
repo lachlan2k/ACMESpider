@@ -41,6 +41,7 @@ func (ac ACMEController) doHTTP01ChallengeVerifyLoop(order *db.DBOrder, authz *d
 		return fmt.Errorf("authz %s is locked - challenge in progress", authz.ID)
 	}
 	defer ac.db.UnlockAuthz([]byte(authz.ID))
+	defer ac.recomputeOrderStatus([]byte(order.ID))
 
 	if challengeIndex >= len(authz.Challenges) {
 		return fmt.Errorf("challenge index is invalid")
@@ -96,6 +97,11 @@ func (ac ACMEController) doHTTP01ChallengeVerifyLoop(order *db.DBOrder, authz *d
 		return bytes.Equal(computedThumbprint, decodedThumbprint)
 	}
 
+	_, err = ac.db.UpdateAuthz([]byte(authz.ID), func(authzToUpdate *db.DBAuthz) error {
+		authzToUpdate.Challenges[challengeIndex].Status = dtos.ChallengeStatusProcessing
+		return nil
+	})
+
 	// Tries once a second for a minute
 	endTime := time.Now().Add(time.Minute)
 	for time.Now().Before(endTime) {
@@ -103,6 +109,7 @@ func (ac ACMEController) doHTTP01ChallengeVerifyLoop(order *db.DBOrder, authz *d
 		if result {
 			_, err = ac.db.UpdateAuthz([]byte(authz.ID), func(authzToUpdate *db.DBAuthz) error {
 				authzToUpdate.Status = dtos.AuthzStatusValid
+				authzToUpdate.Challenges[challengeIndex].Status = dtos.ChallengeStatusValid
 				return nil
 			})
 			return err
@@ -113,6 +120,7 @@ func (ac ACMEController) doHTTP01ChallengeVerifyLoop(order *db.DBOrder, authz *d
 
 	_, err = ac.db.UpdateAuthz([]byte(authz.ID), func(authzToUpdate *db.DBAuthz) error {
 		authzToUpdate.Status = dtos.AuthzStatusInvalid
+		authzToUpdate.Challenges[challengeIndex].Status = dtos.ChallengeStatusInvalid
 		return nil
 	})
 	return err

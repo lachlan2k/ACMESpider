@@ -135,7 +135,6 @@ func (h Handlers) NewOrder(c echo.Context) error {
 		return err
 	}
 
-	// TODO create authzs?
 	c.Request().Header.Set("Location", h.LinkCtrl.OrderPath(newOrder.ID).Abs())
 
 	return c.JSON(http.StatusCreated, h.dbOrderToDTO(newOrder))

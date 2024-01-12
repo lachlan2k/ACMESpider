@@ -230,6 +230,9 @@ func (b *BoltDB) GetCertificate(certID []byte) (*DBCertificate, error) {
 func (b *BoltDB) CreateAuthz(authz DBAuthz) error {
 	return boltSaver[DBAuthz](b.db, authzsBucketName, []byte(authz.ID), &authz)
 }
+func (b *BoltDB) GetAuthz(authzID []byte) (*DBAuthz, error) {
+	return boltGetter[DBAuthz](b.db, authzsBucketName, authzID)
+}
 
 // IsAuthzLocked implements DB.
 func (b *BoltDB) IsAuthzLocked(authzID []byte) (bool, error) {

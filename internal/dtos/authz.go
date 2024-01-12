@@ -7,6 +7,11 @@ const (
 	AuthzStatusDeactivated = "deactivated"
 	AuthzStatusExpired     = "expired"
 	AuthzStatusRevoked     = "revoked"
+
+	ChallengeStatusPending    = "pending"
+	ChallengeStatusProcessing = "processing"
+	ChallengeStatusValid      = "valid"
+	ChallengeStatusInvalid    = "invalid"
 )
 
 type AuthzCreateRequestDTO struct {

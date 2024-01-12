@@ -106,6 +106,8 @@ func (ac ACMEController) NewOrder(payload dtos.OrderCreateRequestDTO, accountID 
 }
 
 func (ac ACMEController) GetOrder(orderID []byte, accountID []byte) (*db.DBOrder, error) {
+	ac.recomputeOrderStatus([]byte(orderID))
+
 	order, err := ac.db.GetOrder(orderID)
 	if err != nil {
 		if db.IsErrNotFound(err) {
@@ -160,6 +162,17 @@ func (ac ACMEController) FinalizeOrder(orderID []byte, payload dtos.OrderFinaliz
 	csr, err := x509.ParseCertificateRequest(derCSR)
 	if err != nil {
 		return nil, BadCSRProblem("Invalid CSR")
+	}
+
+	// Check all authz are complete
+	for i, authzID := range order.AuthzIDs {
+		authz, err := ac.db.GetAuthz([]byte(authzID))
+		if err != nil {
+			return nil, InternalErrorProblem(err)
+		}
+		if authz.Status != dtos.AuthzStatusValid {
+			return nil, OrderNotReadyProblem(fmt.Sprintf("Authz %d was not valid, current status is %s", i, authz.Status))
+		}
 	}
 
 	obtainResult, err := ac.acmeClient.Certificate.ObtainForCSR(certificate.ObtainForCSRRequest{

@@ -4,6 +4,10 @@ import (
 	"bytes"
 	"fmt"
 	"strconv"
+	"time"
+
+	"github.com/lachlan2k/acmespider/internal/db"
+	"github.com/lachlan2k/acmespider/internal/dtos"
 )
 
 func (ac ACMEController) splitChallengeID(challID []byte) (authzID []byte, challengeIndex int, err error) {
@@ -51,4 +55,48 @@ func (ac ACMEController) InitiateChallenge(challID []byte, requesterAccountID []
 	}
 
 	return ac.doHTTP01ChallengeVerifyLoop(order, authz, challengeIndex)
+}
+
+func (ac ACMEController) recomputeOrderStatus(orderID []byte) error {
+	order, err := ac.db.GetOrder(orderID)
+	if err != nil {
+		return err
+	}
+
+	// As of now, this function is only responsible for state changes from pending -> other things
+	if order.Status != dtos.OrderStatusPending {
+		return nil
+	}
+
+	// Check if its expired
+	if timeUnmarshalDB(order.Expires).Before(time.Now()) {
+		_, err := ac.db.UpdateOrder(orderID, func(orderToUpdate *db.DBOrder) error {
+			orderToUpdate.Status = dtos.OrderStatusExpired
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("failed to update order to expired: %v", err)
+		}
+	}
+
+	allValid := true
+	for _, authzID := range order.AuthzIDs {
+		authz, err := ac.db.GetAuthz([]byte(authzID))
+		if err != nil {
+			return err
+		}
+		if authz.Status != dtos.AuthzStatusValid {
+			allValid = false
+			break
+		}
+	}
+
+	if allValid {
+		ac.db.UpdateOrder(orderID, func(orderToUpdate *db.DBOrder) error {
+			orderToUpdate.Status = "ready"
+			return nil
+		})
+	}
+
+	return nil
 }
