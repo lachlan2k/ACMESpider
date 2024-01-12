@@ -75,7 +75,14 @@ type DBAuthz struct {
 	Status     string            `json:"status"`
 	Identifier DBOrderIdentifier `json:"identifier"`
 
-	ChallengeToken string `json:"challenge_token"`
+	Challenges []DBAuthzChallenge `json:"challenges"`
 
 	Locked bool `json:"_locked"`
+}
+
+type DBAuthzChallenge struct {
+	Type          string `json:"type"`
+	Token         string `json:"token"`
+	Status        string `json:"status"`
+	ValidatedTime *int64 `json:"validated_time"`
 }

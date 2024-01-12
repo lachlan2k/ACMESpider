@@ -16,10 +16,12 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func (ac ACMEController) StartHTTP01Challenge(order *db.DBOrder, authz *db.DBAuthz) error {
+const HTTP01ChallengeType = "http-01"
+
+func (ac ACMEController) startHTTP01Challenge(order *db.DBOrder, authz *db.DBAuthz, challengeIndex int) error {
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- ac.DoHTTP01ChallengeVerifyLoop(order, authz)
+		errChan <- ac.doHTTP01ChallengeVerifyLoop(order, authz, challengeIndex)
 	}()
 
 	select {
@@ -30,7 +32,7 @@ func (ac ACMEController) StartHTTP01Challenge(order *db.DBOrder, authz *db.DBAut
 	}
 }
 
-func (ac ACMEController) DoHTTP01ChallengeVerifyLoop(order *db.DBOrder, authz *db.DBAuthz) error {
+func (ac ACMEController) doHTTP01ChallengeVerifyLoop(order *db.DBOrder, authz *db.DBAuthz, challengeIndex int) error {
 	lockSuccess, err := ac.db.TryTakeAuthzLock([]byte(authz.ID))
 	if err != nil {
 		return err
@@ -39,6 +41,14 @@ func (ac ACMEController) DoHTTP01ChallengeVerifyLoop(order *db.DBOrder, authz *d
 		return fmt.Errorf("authz %s is locked - challenge in progress", authz.ID)
 	}
 	defer ac.db.UnlockAuthz([]byte(authz.ID))
+
+	if challengeIndex >= len(authz.Challenges) {
+		return fmt.Errorf("challenge index is invalid")
+	}
+	challenge := authz.Challenges[challengeIndex]
+	if challenge.Type != HTTP01ChallengeType {
+		return fmt.Errorf("challenge type is %s not %s", challenge.Type, HTTP01ChallengeType)
+	}
 
 	accKey, err := ac.db.GetAccountKey([]byte(order.AccountID))
 	if err != nil {
@@ -53,7 +63,7 @@ func (ac ACMEController) DoHTTP01ChallengeVerifyLoop(order *db.DBOrder, authz *d
 	challURL := url.URL{
 		Scheme: "http",
 		Host:   authz.Identifier.Value,
-		Path:   "/.well-known/acme-challenge/" + authz.ChallengeToken,
+		Path:   "/.well-known/acme-challenge/" + challenge.Token,
 	}
 
 	attempt := func() bool {
@@ -74,7 +84,7 @@ func (ac ACMEController) DoHTTP01ChallengeVerifyLoop(order *db.DBOrder, authz *d
 			return false
 		}
 
-		if token != authz.ChallengeToken {
+		if token != challenge.Token {
 			return false
 		}
 

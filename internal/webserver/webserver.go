@@ -100,7 +100,7 @@ func Listen(port string) {
 	acmeAPI.POST(l.FinalizeOrderPath(":"+l.OrderIDParam()).Relative(), h.FinalizeOrder, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
 
 	acmeAPI.POST(l.AuthzPath(":"+l.AuthzIDParam()).Relative(), h.GetAuthorization, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload, h.POSTAsGETMw)
-	acmeAPI.POST(l.ChallengePath(":"+l.AuthzIDParam(), ":"+l.ChallengeIDParam()).Relative(), h.GetChallenge, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload, h.ValidateJWSWithKIDAndExtractPayload)
+	acmeAPI.POST(l.ChallengePath(":"+l.AuthzIDParam(), ":"+l.ChallengeIDParam()).Relative(), h.InitiateChallenge, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload, h.ValidateJWSWithKIDAndExtractPayload)
 	acmeAPI.POST(l.CertPath(":"+l.CertIDParam()).Relative(), h.GetCertificate, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload, h.POSTAsGETMw)
 	acmeAPI.POST(l.RevokeCertPath().Relative(), h.RevokeCert, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
 

@@ -209,7 +209,7 @@ func (h Handlers) GetAuthorization(c echo.Context) error {
 	return echo.ErrNotImplemented
 }
 
-func (h Handlers) GetChallenge(c echo.Context) error {
+func (h Handlers) InitiateChallenge(c echo.Context) error {
 	payloadBody, err := getPayloadBody(c)
 	if err != nil {
 		return acme_controller.InternalErrorProblem(err)
