@@ -16,7 +16,6 @@ import (
 	"github.com/lachlan2k/acmespider/internal/dtos"
 	"github.com/lachlan2k/acmespider/internal/links"
 	"github.com/lachlan2k/acmespider/internal/nonce"
-	"github.com/lachlan2k/acmespider/internal/util"
 )
 
 type Handlers struct {
@@ -68,7 +67,7 @@ func (h Handlers) NewAccount(c echo.Context) error {
 		return acme_controller.MalformedProblem("JWK not provided")
 	}
 
-	newId, err := util.GenerateID()
+	newId, err := acme_controller.GenerateID()
 	if err != nil {
 		return acme_controller.InternalErrorProblem(err)
 	}
@@ -200,7 +199,7 @@ func (h Handlers) NewOrder(c echo.Context) error {
 	}
 
 	// TODO: can we decide what orders the account is/isn't allowed to create?
-	newId, err := util.GenerateID()
+	newId, err := acme_controller.GenerateID()
 	if err != nil {
 		return acme_controller.InternalErrorProblem(err)
 	}
@@ -374,7 +373,7 @@ func (h Handlers) FinalizeOrder(c echo.Context) error {
 		return acme_controller.InternalErrorProblem(err)
 	}
 
-	certID, err := util.GenerateID()
+	certID, err := acme_controller.GenerateID()
 	if err != nil {
 		return acme_controller.InternalErrorProblem(err)
 	}

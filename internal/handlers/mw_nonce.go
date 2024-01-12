@@ -19,12 +19,12 @@ func (h Handlers) ConsumeNonceMw(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		nonce := c.Request().Header.Get("Replay-Nonce")
 		if len(nonce) == 0 {
-			return acme_controller.MalformedProblem("Missing Replay-Nonce Header")
+			return acme_controller.BadNonceProblem("Missing Replay-Nonce Header")
 		}
 
 		isNonceValid, err := h.NonceCtrl.ValidateAndConsume(nonce)
 		if !isNonceValid || err != nil {
-			return acme_controller.MalformedProblem("Invalid Replay-Nonce")
+			return acme_controller.BadNonceProblem("Invalid Replay-Nonce")
 		}
 
 		err = h.AddNonce(c)
