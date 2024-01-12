@@ -20,6 +20,7 @@ type DB interface {
 	GetCertificate(certID []byte) (*DBCertificate, error)
 	CreateCertificate(DBCertificate) error
 
+	GetAuthz(authzID []byte) (*DBAuthz, error)
 	CreateAuthz(DBAuthz) error
 	UpdateAuthz(authzID []byte, updateCallback func(authzToUpdate *DBAuthz) error) (*DBAuthz, error)
 

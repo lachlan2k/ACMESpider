@@ -41,16 +41,48 @@ func (ac ACMEController) NewOrder(payload dtos.OrderCreateRequestDTO, accountID 
 	}
 
 	// TODO: validate these?
-	nbf, err := time.Parse(time.RFC3339, payload.NotBefore)
+	nbf, err := dtos.TimeUnmarshalDTO(payload.NotBefore)
 	if err != nil {
 		return nil, MalformedProblem("invalid NotBefore date format")
 	}
-	naft, err := time.Parse(time.RFC3339, payload.NotAfter)
+	naft, err := dtos.TimeUnmarshalDTO(payload.NotAfter)
 	if err != nil {
 		return nil, MalformedProblem("invalid NotAfter date format")
 	}
 
 	expires := time.Now().Add(orderExpiryTime)
+
+	authzs := make([]db.DBAuthz, len(dbIdentifiers))
+	authzIDs := make([]string, len(dbIdentifiers))
+
+	for i, id := range dbIdentifiers {
+		newAuthzID, err := GenerateID()
+		if err != nil {
+			return nil, InternalErrorProblem(fmt.Errorf("failed to generate ID for new authz: %v", err))
+		}
+
+		authzIDs[i] = newAuthzID
+
+		challengeToken, err := GenerateChallengeToken()
+		if err != nil {
+			return nil, InternalErrorProblem(fmt.Errorf("failed to generate challenge token for authz: %v", err))
+		}
+
+		authzs[i] = db.DBAuthz{
+			ID:         newAuthzID,
+			OrderID:    newId,
+			AccountID:  string(accountID),
+			Status:     dtos.AuthzStatusPending,
+			Identifier: id,
+			Challenges: []db.DBAuthzChallenge{
+				db.DBAuthzChallenge{
+					Type:   HTTP01ChallengeType,
+					Token:  challengeToken,
+					Status: dtos.AuthzStatusPending,
+				},
+			},
+		}
+	}
 
 	dbOrder := db.DBOrder{
 		ID:        newId,
@@ -63,8 +95,7 @@ func (ac ACMEController) NewOrder(payload dtos.OrderCreateRequestDTO, accountID 
 		NotAfter:  naft.Unix(),
 
 		Identifiers: dbIdentifiers,
-
-		AuthzIDs: []string{}, // TODO generate AuthZs
+		AuthzIDs:    authzIDs,
 	}
 
 	err = ac.db.CreateOrder(dbOrder)
@@ -135,6 +166,7 @@ func (ac ACMEController) FinalizeOrder(orderID []byte, payload dtos.OrderFinaliz
 		CSR:       csr,
 		NotBefore: time.Unix(order.NotBefore, 0),
 		NotAfter:  time.Unix(order.NotAfter, 0),
+		Bundle:    false,
 		// TODO what to do with the other params in this struct?
 	})
 	if err != nil {

@@ -218,6 +218,21 @@ func (h Handlers) InitiateChallenge(c echo.Context) error {
 		return acme_controller.MalformedProblem("Expected empty JSON object ({}) for payload")
 	}
 
+	challID := c.Param(h.LinkCtrl.ChallengeIDParam())
+	if challID == "" {
+		return acme_controller.MalformedProblem("Empty challenge ID")
+	}
+
+	accountID, err := getAccountID(c)
+	if err != nil {
+		return acme_controller.InternalErrorProblem(err)
+	}
+
+	err = h.AcmeCtrl.InitiateChallenge([]byte(challID), accountID)
+	if err != nil {
+		return err
+	}
+
 	return echo.ErrNotImplemented
 }
 

@@ -7,6 +7,10 @@ import (
 	"github.com/lachlan2k/acmespider/internal/dtos"
 )
 
+func time64ToString(t int64) string {
+	return dtos.TimeMarshalDTO(time.Unix(t, 0))
+}
+
 func (h Handlers) dbOrderToDTO(order *db.DBOrder) dtos.OrderResponseDTO {
 	identifiers := make([]dtos.OrderIdentifierDTO, len(order.Identifiers))
 	for i, identifier := range order.Identifiers {
@@ -23,9 +27,9 @@ func (h Handlers) dbOrderToDTO(order *db.DBOrder) dtos.OrderResponseDTO {
 
 	return dtos.OrderResponseDTO{
 		Status:            order.Status,
-		Expires:           time.Unix(order.Expires, 0).Format(time.RFC3339),
-		NotBefore:         time.Unix(order.NotBefore, 0).Format(time.RFC3339),
-		NotAfter:          time.Unix(order.NotAfter, 0).Format(time.RFC3339),
+		Expires:           time64ToString(order.Expires),
+		NotBefore:         time64ToString(order.NotBefore),
+		NotAfter:          time64ToString(order.NotAfter),
 		Identifiers:       identifiers,
 		AuthorizationURLs: authzURLs,
 		FinalizeURL:       h.LinkCtrl.FinalizeOrderPath(order.ID).Abs(),
