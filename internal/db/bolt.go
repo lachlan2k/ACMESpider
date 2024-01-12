@@ -297,7 +297,7 @@ func (b *BoltDB) UpdateAuthz(authzID []byte, updateCallback func(authzToUpdate *
 }
 
 func NewBoltDb(path string) (DB, error) {
-	db, err := bolt.Open("my.db", 0600, &bolt.Options{Timeout: 1 * time.Second})
+	db, err := bolt.Open(path, 0600, &bolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
 		return nil, err
 	}

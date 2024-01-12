@@ -89,7 +89,7 @@ func (h Handlers) lookupKID(kid string) (*jose.JSONWebKey, []byte, error) {
 		return nil, nil, err
 	}
 
-	jwk, err := h.DB.GetAccountKey(accountID)
+	jwk, err := h.AcmeCtrl.GetAccountKey(accountID)
 	if err != nil {
 		return nil, nil, err
 	}

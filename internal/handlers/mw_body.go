@@ -18,23 +18,23 @@ const protectedHeaderCtxKey = "protectedHeader"
 const accountIDCtxKey = "accountID"
 
 // body, internalErr, userErr
-func getPayloadBoundBody[BodyT any](c echo.Context) (*BodyT, error, error) {
+func getPayloadBoundBody[BodyT any](c echo.Context) (*BodyT, error) {
 	data := c.Get(payloadBodyCtxKey)
 	if data == nil {
-		return nil, errors.New("payloadBody on context was nil"), nil
+		return nil, acme_controller.InternalErrorProblem(fmt.Errorf("%s on context was nil", payloadBodyCtxKey))
 	}
 	dataBuff, ok := data.([]byte)
 	if !ok {
-		return nil, errors.New("payloadBody couldn't be cast to []byte"), nil
+		return nil, acme_controller.InternalErrorProblem(fmt.Errorf("%s on context couldn't be cast to []byte", payloadBodyCtxKey))
 	}
 
 	var decodedBody BodyT
 	err := json.Unmarshal(dataBuff, &decodedBody)
 	if err != nil {
-		return nil, nil, err
+		return nil, acme_controller.MalformedProblem("Invalid JSON")
 	}
 
-	return &decodedBody, nil, nil
+	return &decodedBody, nil
 }
 
 func getPayloadBody(c echo.Context) ([]byte, error) {

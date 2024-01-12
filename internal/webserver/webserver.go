@@ -9,6 +9,7 @@ import (
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/registration"
+	"github.com/lachlan2k/acmespider/internal/acme_controller"
 	"github.com/lachlan2k/acmespider/internal/handlers"
 	"github.com/lachlan2k/acmespider/internal/links"
 	"github.com/lachlan2k/acmespider/internal/nonce"
@@ -71,8 +72,11 @@ func Listen(port string) {
 		BaseURL: "http://localhost:" + port + "/acme",
 	}
 
+	// todo: add db
+	acmeCtrl := acme_controller.New(nil, client, l)
+
 	h := handlers.Handlers{
-		Client:    client,
+		AcmeCtrl:  acmeCtrl,
 		NonceCtrl: nonce.NewInMemCtrl(),
 		LinkCtrl:  l,
 	}
