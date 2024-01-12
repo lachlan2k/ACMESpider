@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,11 +15,13 @@ import (
 
 	"github.com/lachlan2k/acmespider/internal/db"
 	"github.com/lachlan2k/acmespider/internal/dtos"
+	"github.com/lachlan2k/acmespider/internal/links"
 	"github.com/sirupsen/logrus"
 )
 
 type ACMEController struct {
-	DB db.DB
+	DB       db.DB
+	LinkCtrl links.LinkController
 }
 
 func GenerateID() (string, error) {
@@ -129,4 +132,34 @@ func (ac ACMEController) DoHTTP01ChallengeVerifyLoop(order *db.DBOrder, authz *d
 		return nil
 	})
 	return err
+}
+
+func (ac ACMEController) GetCertificate(accountID []byte, certID []byte) ([]byte, error) {
+	cert, err := ac.DB.GetCertificate([]byte(certID))
+	if err != nil {
+		if db.IsErrNotFound(err) {
+			return nil, UnauthorizedProblem("")
+		}
+		return nil, InternalErrorProblem(err)
+	}
+	if cert == nil {
+		return nil, UnauthorizedProblem("")
+	}
+	if cert.AccountID != string(accountID) {
+		return nil, UnauthorizedProblem("")
+	}
+
+	pemOutput := []byte{}
+	pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: cert.CertificateDER,
+	})
+	if len(cert.IssuerCertificate) > 0 {
+		pemOutput = append(pemOutput, pem.EncodeToMemory(&pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: cert.IssuerCertificate,
+		})...)
+	}
+
+	return pemOutput, nil
 }

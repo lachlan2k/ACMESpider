@@ -77,6 +77,8 @@ func Listen(port string) {
 		LinkCtrl:  l,
 	}
 
+	app.HTTPErrorHandler = h.ErrorHandler(app)
+
 	acmeAPI.Use(h.AddIndexLinkMw)
 
 	acmeAPI.GET(l.NewNoncePath().Relative(), h.GetNonce, h.AddNonceMw)

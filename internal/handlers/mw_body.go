@@ -6,11 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 
 	"github.com/go-jose/go-jose/v3"
 	"github.com/labstack/echo/v4"
-	"github.com/lachlan2k/acmespider/internal/util"
+	"github.com/lachlan2k/acmespider/internal/acme_controller"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -90,7 +89,7 @@ func (h Handlers) validateJWSAndExtractPayload(next echo.HandlerFunc, c echo.Con
 	requestBody, err := io.ReadAll(c.Request().Body)
 	if err != nil {
 		log.WithError(err).Debug("failed to read request body")
-		return echo.ErrBadRequest
+		return acme_controller.MalformedProblem("Request body could not be read")
 	}
 
 	jws, sig, err := extractJWS(requestBody)
@@ -104,16 +103,16 @@ func (h Handlers) validateJWSAndExtractPayload(next echo.HandlerFunc, c echo.Con
 	jwkProvided := protected.JSONWebKey != nil
 
 	if kidProvided && jwkProvided {
-		return echo.NewHTTPError(http.StatusBadRequest, "JWS contained both a KID and JWK - these are mutually exclusive")
+		return acme_controller.MalformedProblem("JWS contained both a KID and JWK - these are mutually exclusive")
 	}
 	if !kidProvided && !jwkProvided {
-		return echo.NewHTTPError(http.StatusBadRequest, "JWS did not provide a KID or a JWK")
+		return acme_controller.MalformedProblem("JWS did not provide a KID or a JWK")
 	}
 	if kidProvided && !allowKID {
-		return echo.NewHTTPError(http.StatusBadRequest, "JWS provided a KID, but this endpoint does not allow KIDs")
+		return acme_controller.MalformedProblem("JWS provided a KID, but this endpoint does not allow KIDs")
 	}
 	if jwkProvided && !allowJWK {
-		return echo.NewHTTPError(http.StatusBadRequest, "JWS provided a JWK, but this endpoint does not allow JWKs")
+		return acme_controller.MalformedProblem("JWS provided a JWK, but this endpoint does not allow JWKs")
 	}
 
 	// If a JWK is provided (and allowed), then we use that to self-validate the signature
@@ -126,16 +125,16 @@ func (h Handlers) validateJWSAndExtractPayload(next echo.HandlerFunc, c echo.Con
 		jwk, accountID, err = h.lookupKID(protected.KeyID)
 		if jwk == nil || err != nil {
 			log.WithError(err).WithField("kid", protected.KeyID).Debug("KID lookup is not tied to a valid key")
-			return echo.NewHTTPError(http.StatusUnauthorized, "KID lookup is not tied to a valid key")
+			return acme_controller.UnauthorizedProblem("")
 		}
 	}
 
 	payload, err := jws.Verify(jwk)
 	if err != nil {
 		if errors.Is(err, jose.ErrCryptoFailure) {
-			return echo.NewHTTPError(http.StatusBadRequest, "Invalid JWS signature")
+			return acme_controller.UnauthorizedProblem("Invalid JWS signature")
 		} else {
-			return util.ServerError("internal server error", err)
+			return acme_controller.InternalErrorProblem(err)
 		}
 	}
 
@@ -145,23 +144,23 @@ func (h Handlers) validateJWSAndExtractPayload(next echo.HandlerFunc, c echo.Con
 		log.WithError(err).Debug("failed to validate nonce")
 	}
 	if !nonceOk || nonceErr != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "nonce was invalid")
+		return acme_controller.MalformedProblem("nonce was invalid")
 	}
 
 	// 5. Ensure the URL in the protected headers matches the URL requested
 	protURL := protected.ExtraHeaders["url"]
 	protURLStr, protURLOk := protURL.(string)
 	if !protURLOk {
-		return echo.NewHTTPError(http.StatusBadRequest, "JWS header did not contain a URL")
+		return acme_controller.MalformedProblem("JWS header did not contain a URL")
 	}
 	if c.Request().RequestURI != protURLStr {
-		return echo.NewHTTPError(http.StatusBadRequest, "URL in JWS header did not match URL requested (%s vs %s)", c.Request().RequestURI, protURLStr)
+		return acme_controller.MalformedProblem(fmt.Sprintf("URL in JWS header did not match URL requested (%s vs %s)", c.Request().RequestURI, protURLStr))
 	}
 
 	// 6. Decode the body and attach it to the context
 	decodedPayload, err := base64.URLEncoding.DecodeString(string(payload))
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid payload base64")
+		return acme_controller.MalformedProblem("Invalid payload base64")
 	}
 
 	c.Set(payloadBodyCtxKey, decodedPayload)
@@ -193,10 +192,10 @@ func (h Handlers) POSTAsGETMw(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		valid, err := ensurePayloadIs(c, "")
 		if !valid {
-			return echo.NewHTTPError(http.StatusBadRequest, "Invalid POST-as-GET request: expected signed request with empty string as payload")
+			return acme_controller.MalformedProblem("Invalid POST-as-GET request: expected signed request with empty string as payload")
 		}
 		if err != nil {
-			return util.ServerError("internal server error", fmt.Errorf("failed to check payload body was empty: %v", err))
+			return acme_controller.InternalErrorProblem(fmt.Errorf("failed to check payload body was empty: %v", err))
 		}
 
 		return next(c)

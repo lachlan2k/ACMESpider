@@ -4,11 +4,10 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 
 	"github.com/go-jose/go-jose/v3"
-	"github.com/labstack/echo/v4"
+	"github.com/lachlan2k/acmespider/internal/acme_controller"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -42,7 +41,7 @@ func checkJWKAlgorithmValidForAccount(alg string, key *jose.JSONWebKey) error {
 
 func extractJWS(requestBody []byte) (*jose.JSONWebSignature, *jose.Signature, error) {
 	if len(requestBody) == 0 || requestBody[0] != '{' {
-		return nil, nil, echo.NewHTTPError(http.StatusBadRequest, "Invalid JSON body")
+		return nil, nil, acme_controller.MalformedProblem("Invalid JSON")
 	}
 
 	// we extract into here to ensure there are no dis-allowed fields
@@ -55,30 +54,30 @@ func extractJWS(requestBody []byte) (*jose.JSONWebSignature, *jose.Signature, er
 	err := json.Unmarshal(requestBody, &disallowedFields)
 	if err != nil {
 		log.WithError(err).Debug("failed to unmarshal json body")
-		return nil, nil, echo.ErrBadRequest
+		return nil, nil, acme_controller.MalformedProblem("Invalid JSON")
 	}
 
 	if disallowedFields.Header != nil {
-		return nil, nil, echo.NewHTTPError(http.StatusBadRequest, "The field 'header' is not allowed")
+		return nil, nil, acme_controller.MalformedProblem("JWS contained disallowed 'header' field")
 	}
 	if len(disallowedFields.Signatures) > 0 {
-		return nil, nil, echo.NewHTTPError(http.StatusBadRequest, "Multiple signatures are not allowed")
+		return nil, nil, acme_controller.MalformedProblem("JWS contained multiple signatures which is not allowed")
 	}
 
 	jws, err := jose.ParseSigned(string(requestBody))
 	if err != nil {
 		log.WithError(err).Debug("failed to parse jose jws")
-		return nil, nil, echo.ErrBadRequest
+		return nil, nil, acme_controller.MalformedProblem("JWS invalid")
 	}
 
 	if len(jws.Signatures) != 1 {
-		return nil, nil, echo.NewHTTPError(http.StatusBadRequest, "Expected exactly one JWS signature")
+		return nil, nil, acme_controller.MalformedProblem("Expected JWS to contain exactly one Signature")
 	}
 
 	protected := jws.Signatures[0].Protected
 	algCheck := checkJWKAlgorithmValidForAccount(protected.Algorithm, protected.JSONWebKey)
 	if algCheck != nil {
-		return nil, nil, echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Supplied JWS algorithm of %s is not valid: %s", protected.Algorithm, algCheck.Error()))
+		return nil, nil, acme_controller.MalformedProblem(fmt.Sprintf("Supplied JWS algorithm of %s is not valid: %s", protected.Algorithm, algCheck.Error()))
 	}
 
 	return jws, &jws.Signatures[0], nil

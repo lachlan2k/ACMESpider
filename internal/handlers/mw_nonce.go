@@ -1,10 +1,8 @@
 package handlers
 
 import (
-	"net/http"
-
 	"github.com/labstack/echo/v4"
-	"github.com/lachlan2k/acmespider/internal/util"
+	"github.com/lachlan2k/acmespider/internal/acme_controller"
 )
 
 func (h Handlers) AddNonceMw(next echo.HandlerFunc) echo.HandlerFunc {
@@ -21,12 +19,12 @@ func (h Handlers) ConsumeNonceMw(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		nonce := c.Request().Header.Get("Replay-Nonce")
 		if len(nonce) == 0 {
-			return echo.NewHTTPError(http.StatusBadRequest, "Missing Replay-Nonce Header")
+			return acme_controller.MalformedProblem("Missing Replay-Nonce Header")
 		}
 
 		isNonceValid, err := h.NonceCtrl.ValidateAndConsume(nonce)
 		if !isNonceValid || err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, "Invalid Replay-Nonce")
+			return acme_controller.MalformedProblem("Invalid Replay-Nonce")
 		}
 
 		err = h.AddNonce(c)
@@ -42,7 +40,7 @@ func (h Handlers) AddNonce(c echo.Context) error {
 
 	nonce, err := h.NonceCtrl.Gen()
 	if err != nil {
-		return util.ServerError("internal server error", err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 
 	headers.Set("Replay-Nonce", nonce)

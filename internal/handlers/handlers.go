@@ -4,7 +4,6 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"net/http"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/go-acme/lego/v4/certificate"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/labstack/echo/v4"
+	"github.com/lachlan2k/acmespider/internal/acme_controller"
 	"github.com/lachlan2k/acmespider/internal/db"
 	"github.com/lachlan2k/acmespider/internal/dtos"
 	"github.com/lachlan2k/acmespider/internal/links"
@@ -21,6 +21,7 @@ import (
 
 type Handlers struct {
 	Client    *lego.Client
+	AcmeCtrl  *acme_controller.ACMEController
 	NonceCtrl nonce.NonceController
 	LinkCtrl  links.LinkController
 	DB        db.DB
@@ -41,7 +42,7 @@ func (h Handlers) GetNonce(c echo.Context) error {
 	case http.MethodHead:
 		return c.NoContent(http.StatusOK)
 	default:
-		return echo.ErrMethodNotAllowed
+		return acme_controller.MethodNotAllowed()
 	}
 }
 
@@ -52,24 +53,24 @@ func (h Handlers) GetDirectory(c echo.Context) error {
 func (h Handlers) NewAccount(c echo.Context) error {
 	payload, internalErr, userErr := getPayloadBoundBody[dtos.AccountRequestDTO](c)
 	if internalErr != nil {
-		return util.GenericServerErr(internalErr)
+		return acme_controller.InternalErrorProblem(internalErr)
 	}
 	if userErr != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, userErr.Error())
+		return acme_controller.MalformedProblem("Invalid body")
 	}
 
 	jwsHeaders, err := getProtectedHeader(c)
 	if err != nil {
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 	jwk := jwsHeaders.JSONWebKey
 	if jwk == nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "JWK not provided")
+		return acme_controller.MalformedProblem("JWK not provided")
 	}
 
 	newId, err := util.GenerateID()
 	if err != nil {
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 
 	accToCreate := db.DBAccount{
@@ -82,7 +83,7 @@ func (h Handlers) NewAccount(c echo.Context) error {
 
 	err = h.DB.CreateAccount(accToCreate, jwk)
 	if err != nil {
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 
 	c.Request().Header.Set("Location", h.LinkCtrl.AccountPath(newId).Abs())
@@ -102,18 +103,18 @@ func (h Handlers) dbAccountToDTO(acc *db.DBAccount) dtos.AccountResponseDTO {
 func (h Handlers) GetOrUpdateAccount(c echo.Context) error {
 	payload, err := getPayloadBody(c)
 	if err != nil {
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 	accountID, err := getAccountID(c)
 	if err != nil {
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 	accIDParam := c.Param(h.LinkCtrl.AccountIDParam())
 	if accIDParam == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "accID is empty")
+		return acme_controller.MalformedProblem("accID is empty")
 	}
 	if string(accountID) != accIDParam {
-		return echo.ErrUnauthorized
+		return acme_controller.UnauthorizedProblem("")
 	}
 
 	if len(payload) == 0 {
@@ -121,9 +122,10 @@ func (h Handlers) GetOrUpdateAccount(c echo.Context) error {
 		acc, err := h.DB.GetAccount(accountID)
 		if err != nil {
 			if db.IsErrNotFound(err) {
-				return echo.ErrNotFound
+				// Not sure how we'd get here, given that account ID needs to be tied to a valid KID
+				return acme_controller.UnauthorizedProblem("")
 			}
-			return util.GenericServerErr(err)
+			return acme_controller.InternalErrorProblem(err)
 		}
 		return c.JSON(http.StatusOK, h.dbAccountToDTO(acc))
 	}
@@ -131,12 +133,12 @@ func (h Handlers) GetOrUpdateAccount(c echo.Context) error {
 	var updateBody dtos.AccountRequestDTO
 	err = json.Unmarshal(payload, &updateBody)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid body").SetInternal(err)
+		return acme_controller.MalformedProblem("Invalid body")
 	}
 
 	acc, err := h.DB.GetAccount(accountID)
 	if err != nil {
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 
 	// There are two kinds of updates we can do
@@ -146,7 +148,7 @@ func (h Handlers) GetOrUpdateAccount(c echo.Context) error {
 		acc.Status = dtos.AccountStatusDeactivated
 		err := h.DB.DeleteAccount(accountID)
 		if err != nil {
-			return util.GenericServerErr(err)
+			return acme_controller.InternalErrorProblem(err)
 		}
 
 		return c.JSON(http.StatusOK, h.dbAccountToDTO(acc))
@@ -159,11 +161,24 @@ func (h Handlers) GetOrUpdateAccount(c echo.Context) error {
 		return nil
 	})
 	if err != nil {
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
+
 	}
 
 	// Update account
 	return c.JSON(http.StatusOK, h.dbAccountToDTO(updatedAccount))
+}
+
+func (h Handlers) ErrorHandler(app *echo.Echo) echo.HTTPErrorHandler {
+	return func(err error, c echo.Context) {
+		probErr, ok := err.(*acme_controller.ProblemDetails)
+		if !ok {
+			app.DefaultHTTPErrorHandler(err, c)
+			return
+		}
+
+		c.JSON(probErr.HTTPStatus, probErr)
+	}
 }
 
 func (h Handlers) NotImplemented(c echo.Context) error {
@@ -173,32 +188,33 @@ func (h Handlers) NotImplemented(c echo.Context) error {
 func (h Handlers) NewOrder(c echo.Context) error {
 	newOrderPayload, internalErr, userErr := getPayloadBoundBody[dtos.OrderCreateRequestDTO](c)
 	if internalErr != nil {
-		return util.GenericServerErr(internalErr)
+		return acme_controller.InternalErrorProblem(internalErr)
+
 	}
 	if userErr != nil {
-		return echo.ErrBadRequest
+		return acme_controller.MalformedProblem("Invalid body")
 	}
 	accountID, err := getAccountID(c)
 	if err != nil {
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 
 	// TODO: can we decide what orders the account is/isn't allowed to create?
 	newId, err := util.GenerateID()
 	if err != nil {
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 
 	dbIdentifiers := make([]db.DBOrderIdentifier, len(newOrderPayload.Identifiers))
 	for i, identifier := range newOrderPayload.Identifiers {
 		if identifier.Value == "" {
-			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("identifier index %d has an empty value", i))
+			return acme_controller.MalformedProblem(fmt.Sprintf("identifier index %d has an empty value", i))
 		}
 
 		// TODO: here, decide if a client is/isn't allowed to create a specific Value
 
 		if identifier.Type != "dns" {
-			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("identifier index %d had a type of %q, but the only supported type is \"dns\"", i, identifier.Type))
+			return acme_controller.MalformedProblem(fmt.Sprintf("identifier index %d had a type of %q, but the only supported type is \"dns\"", i, identifier.Type))
 		}
 
 		dbIdentifiers[i] = db.DBOrderIdentifier{
@@ -209,11 +225,11 @@ func (h Handlers) NewOrder(c echo.Context) error {
 
 	nbf, err := time.Parse(time.RFC3339, newOrderPayload.NotBefore)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid NotBefore date format")
+		return acme_controller.MalformedProblem("invalid NotBefore date format")
 	}
 	naft, err := time.Parse(time.RFC3339, newOrderPayload.NotAfter)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid NotAfter date format")
+		return acme_controller.MalformedProblem("invalid NotAfter date format")
 	}
 
 	expires := time.Now().Add(2 * time.Minute)
@@ -231,12 +247,11 @@ func (h Handlers) NewOrder(c echo.Context) error {
 		Identifiers: dbIdentifiers,
 
 		AuthzIDs: []string{}, // TODO generate AuthZs
-
 	}
 
 	err = h.DB.CreateOrder(dbOrder)
 	if err != nil {
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 
 	// TODO create authzs?
@@ -257,23 +272,23 @@ func (h Handlers) NewOrder(c echo.Context) error {
 func (h Handlers) GetOrder(c echo.Context) error {
 	orderID := c.Param(h.LinkCtrl.OrderIDParam())
 	if orderID == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "no order ID")
+		return acme_controller.MalformedProblem("no order ID")
 	}
 	accountID, err := getAccountID(c)
 	if err != nil {
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 
 	order, err := h.DB.GetOrder([]byte(orderID))
 	if err != nil {
 		if db.IsErrNotFound(err) {
-			return echo.ErrUnauthorized
+			return acme_controller.UnauthorizedProblem("")
 		}
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 
 	if order.AccountID != string(accountID) {
-		return echo.ErrUnauthorized
+		return acme_controller.UnauthorizedProblem("")
 	}
 
 	return c.JSON(http.StatusOK, h.dbOrderToDTO(order))
@@ -282,20 +297,20 @@ func (h Handlers) GetOrder(c echo.Context) error {
 func (h Handlers) GetOrdersByAccountID(c echo.Context) error {
 	paramAccountID := c.Param(h.LinkCtrl.AccountIDParam())
 	if paramAccountID == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "no account ID")
+		return acme_controller.MalformedProblem("no account ID")
 	}
 	accountID, err := getAccountID(c)
 	if err != nil {
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 
 	if string(accountID) != paramAccountID {
-		return echo.ErrUnauthorized
+		return acme_controller.UnauthorizedProblem("")
 	}
 
 	account, err := h.DB.GetAccount(accountID)
 	if err != nil {
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 
 	orders := []string{}
@@ -311,42 +326,42 @@ func (h Handlers) GetOrdersByAccountID(c echo.Context) error {
 func (h Handlers) FinalizeOrder(c echo.Context) error {
 	finaliseRequestBody, internalErr, userErr := getPayloadBoundBody[dtos.OrderFinalizeRequestDTO](c)
 	if internalErr != nil {
-		return util.GenericServerErr(internalErr)
+		return acme_controller.InternalErrorProblem(internalErr)
 	}
 	if userErr != nil {
-		return echo.ErrBadRequest
+		return acme_controller.MalformedProblem("Invalid body")
 	}
 
 	orderID := c.Param(h.LinkCtrl.OrderIDParam())
 	if orderID == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "no order ID")
+		return acme_controller.MalformedProblem("no order ID")
 	}
 
 	accountID, err := getAccountID(c)
 	if err != nil {
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 
 	order, err := h.DB.GetOrder([]byte(orderID))
 	if err != nil {
 		if db.IsErrNotFound(err) {
-			return echo.ErrUnauthorized
+			return acme_controller.UnauthorizedProblem("")
 		}
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 
 	if string(accountID) != order.AccountID {
-		return echo.ErrUnauthorized
+		return acme_controller.UnauthorizedProblem("")
 	}
 
 	derCSR, err := base64.URLEncoding.DecodeString(finaliseRequestBody.CSRB64)
 	if err != nil {
-		return echo.ErrBadRequest
+		return acme_controller.MalformedProblem("Invalid CSR Base64")
 	}
 
 	csr, err := x509.ParseCertificateRequest(derCSR)
 	if err != nil {
-		return echo.ErrBadRequest
+		return acme_controller.MalformedProblem("Invalid CSR")
 	}
 
 	obtainResult, err := h.Client.Certificate.ObtainForCSR(certificate.ObtainForCSRRequest{
@@ -356,25 +371,25 @@ func (h Handlers) FinalizeOrder(c echo.Context) error {
 		// TODO what to do with the other params in this struct?
 	})
 	if err != nil {
-		return util.ServerError("failed to obtain certificate", err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 
 	certID, err := util.GenerateID()
 	if err != nil {
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 
 	if len(obtainResult.Certificate) == 0 {
-		return util.GenericServerErr(fmt.Errorf("obtained certificate is empty: %v", obtainResult))
+		return acme_controller.InternalErrorProblem(fmt.Errorf("obtained certificate is empty: %v", obtainResult))
 	}
 
 	_, err = x509.ParseCertificate(obtainResult.Certificate)
 	if err != nil {
-		return util.GenericServerErr(fmt.Errorf("obtained certificate is invalid: %v", err))
+		return acme_controller.InternalErrorProblem(fmt.Errorf("obtained certificate is invalid: %v", err))
 	}
 	_, err = x509.ParseCertificate(obtainResult.IssuerCertificate)
 	if len(obtainResult.IssuerCertificate) > 0 && err != nil {
-		return util.GenericServerErr(fmt.Errorf("obtained issuer certificate is inl"))
+		return acme_controller.InternalErrorProblem(fmt.Errorf("obtained issuer certificate is inl"))
 	}
 
 	newCert := db.DBCertificate{
@@ -387,7 +402,7 @@ func (h Handlers) FinalizeOrder(c echo.Context) error {
 
 	err = h.DB.CreateCertificate(newCert)
 	if err != nil {
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 
 	newOrder, err := h.DB.UpdateOrder([]byte(order.ID), func(orderToUpdate *db.DBOrder) error {
@@ -396,7 +411,7 @@ func (h Handlers) FinalizeOrder(c echo.Context) error {
 		return nil
 	})
 	if err != nil {
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 
 	c.Request().Header.Set("Location", h.LinkCtrl.OrderPath(order.ID).Abs())
@@ -437,10 +452,10 @@ func (h Handlers) GetAuthorization(c echo.Context) error {
 func (h Handlers) GetChallenge(c echo.Context) error {
 	payloadBody, err := getPayloadBody(c)
 	if err != nil {
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 	if string(payloadBody) != "{}" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Expected empty JSON object ({}) for payload")
+		return acme_controller.MalformedProblem("Expected empty JSON object ({}) for payload")
 	}
 
 	return echo.ErrNotImplemented
@@ -449,37 +464,16 @@ func (h Handlers) GetChallenge(c echo.Context) error {
 func (h Handlers) GetCertificate(c echo.Context) error {
 	accountID, err := getAccountID(c)
 	if err != nil {
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 	certID := c.Param(h.LinkCtrl.CertIDParam())
 	if len(certID) == 0 {
-		return echo.NewHTTPError(http.StatusBadRequest, "Empty certificate ID")
+		return acme_controller.MalformedProblem("Empty certificate ID")
 	}
 
-	cert, err := h.DB.GetCertificate([]byte(certID))
+	pemOutput, err := h.AcmeCtrl.GetCertificate(accountID, []byte(certID))
 	if err != nil {
-		if db.IsErrNotFound(err) {
-			return echo.ErrUnauthorized
-		}
-		return util.GenericServerErr(err)
-	}
-	if cert == nil {
-		return echo.ErrUnauthorized
-	}
-	if cert.AccountID != string(accountID) {
-		return echo.ErrUnauthorized
-	}
-
-	pemOutput := []byte{}
-	pem.EncodeToMemory(&pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: cert.CertificateDER,
-	})
-	if len(cert.IssuerCertificate) > 0 {
-		pemOutput = append(pemOutput, pem.EncodeToMemory(&pem.Block{
-			Type:  "CERTIFICATE",
-			Bytes: cert.IssuerCertificate,
-		})...)
+		return err
 	}
 
 	return c.Blob(http.StatusOK, "application/pem-certificate-chain", pemOutput)
@@ -488,33 +482,33 @@ func (h Handlers) GetCertificate(c echo.Context) error {
 func (h Handlers) RevokeCert(c echo.Context) error {
 	_, internalErr, userErr := getPayloadBoundBody[dtos.RevokeCertRequestDTO](c)
 	if internalErr != nil {
-		return util.GenericServerErr(internalErr)
+		return acme_controller.InternalErrorProblem(internalErr)
 	}
 	if userErr != nil {
-		return echo.ErrBadRequest
+		return acme_controller.MalformedProblem("Invalid body")
 	}
 
 	accountID, err := getAccountID(c)
 	if err != nil {
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 	certID := c.Param(h.LinkCtrl.CertIDParam())
 	if len(certID) == 0 {
-		return echo.NewHTTPError(http.StatusBadRequest, "Empty certificate ID")
+		return acme_controller.MalformedProblem("Empty certificate ID")
 	}
 
 	cert, err := h.DB.GetCertificate([]byte(certID))
 	if err != nil {
 		if db.IsErrNotFound(err) {
-			return echo.ErrUnauthorized
+			return acme_controller.UnauthorizedProblem("")
 		}
-		return util.GenericServerErr(err)
+		return acme_controller.InternalErrorProblem(err)
 	}
 	if cert == nil {
-		return echo.ErrUnauthorized
+		return acme_controller.UnauthorizedProblem("")
 	}
 	if cert.AccountID != string(accountID) {
-		return echo.ErrUnauthorized
+		return acme_controller.UnauthorizedProblem("")
 	}
 
 	return echo.ErrNotImplemented
