@@ -86,6 +86,10 @@ func getAccountID(c echo.Context) ([]byte, error) {
 }
 
 func (h Handlers) validateJWSAndExtractPayload(next echo.HandlerFunc, c echo.Context, allowKID bool, allowJWK bool) error {
+	if c.Request().Header.Get("Content-Type") != "application/jose+json" {
+		return acme_controller.UnsupportedMediaTypeProblem("")
+	}
+
 	requestBody, err := io.ReadAll(c.Request().Body)
 	if err != nil {
 		log.WithError(err).Debug("failed to read request body")

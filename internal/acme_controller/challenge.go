@@ -64,6 +64,8 @@ func (ac ACMEController) recomputeOrderStatus(orderID []byte) error {
 	}
 
 	// As of now, this function is only responsible for state changes from pending -> other things
+	// TODO: support expiring authzs?
+	// TODO: read all state transitions in the RFC
 	if order.Status != dtos.OrderStatusPending {
 		return nil
 	}
