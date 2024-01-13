@@ -27,7 +27,7 @@ func (ac ACMEController) startHTTP01Challenge(order *db.DBOrder, authz *db.DBAut
 	select {
 	case err := <-errChan:
 		return err
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		return nil
 	}
 }
@@ -49,6 +49,9 @@ func (ac ACMEController) doHTTP01ChallengeVerifyLoop(order *db.DBOrder, authz *d
 	challenge := authz.Challenges[challengeIndex]
 	if challenge.Type != HTTP01ChallengeType {
 		return fmt.Errorf("challenge type is %s not %s", challenge.Type, HTTP01ChallengeType)
+	}
+	if challenge.Status != dtos.ChallengeStatusPending {
+		return fmt.Errorf("challenge status is %s not %s", challenge.Status, dtos.ChallengeStatusPending)
 	}
 
 	accKey, err := ac.db.GetAccountKey([]byte(order.AccountID))
@@ -110,6 +113,9 @@ func (ac ACMEController) doHTTP01ChallengeVerifyLoop(order *db.DBOrder, authz *d
 			_, err = ac.db.UpdateAuthz([]byte(authz.ID), func(authzToUpdate *db.DBAuthz) error {
 				authzToUpdate.Status = dtos.AuthzStatusValid
 				authzToUpdate.Challenges[challengeIndex].Status = dtos.ChallengeStatusValid
+
+				valTime := timeMarshalDB(time.Now())
+				authzToUpdate.Challenges[challengeIndex].ValidatedTime = &valTime
 				return nil
 			})
 			return err

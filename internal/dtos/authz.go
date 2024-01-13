@@ -20,7 +20,7 @@ type AuthzCreateRequestDTO struct {
 
 type AuthzDTO struct {
 	Status     string              `json:"status"`
-	Expires    string              `json:"expires"`
+	Expires    string              `json:"expires,omitempty"`
 	Identifier AuthzIdentifierDTO  `json:"identifier"`
 	Challenges []AuthzChallengeDTO `json:"challenges"`
 	Wildcard   bool                `json:"wildcard"`
@@ -32,9 +32,9 @@ type AuthzIdentifierDTO struct {
 }
 
 type AuthzChallengeDTO struct {
-	URL       string `json:"url"`
-	Type      string `json:"type"`
-	Status    string `json:"status"`
-	Token     string `json:"token"`
-	Validated string `json:"validated"`
+	URL           string `json:"url"`
+	Type          string `json:"type"`
+	Status        string `json:"status"`
+	Token         string `json:"token"`
+	ValidatedTime string `json:"validated,omitempty"`
 }

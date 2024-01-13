@@ -78,8 +78,8 @@ func (l LinkController) AuthzPath(authzID string) Path {
 	return l.Path("authz/" + authzID)
 }
 
-func (l LinkController) ChallengePath(authzID string, challengeID string) Path {
-	return l.Path("challenge/" + authzID + "/" + challengeID)
+func (l LinkController) ChallengePath(challengeID string) Path {
+	return l.Path("chall/" + challengeID)
 }
 
 func (l LinkController) CertPath(certID string) Path {

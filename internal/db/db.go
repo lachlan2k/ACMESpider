@@ -5,6 +5,9 @@ import "github.com/go-jose/go-jose/v3"
 type DB interface {
 	Seed() error
 
+	SaveGlobalKey(privateKey []byte) error
+	GetGlobalKey() ([]byte, error)
+
 	SaveAccountKey(accountID []byte, key *jose.JSONWebKey) error
 	GetAccountKey(accountID []byte) (*jose.JSONWebKey, error)
 
@@ -45,8 +48,8 @@ type DBOrder struct {
 	Status  string `json:"status"`
 	Expires int64  `json:"expires"`
 
-	NotBefore int64 `json:"not_before"`
-	NotAfter  int64 `json:"not_after"`
+	NotBefore *int64 `json:"not_before,omitempty"`
+	NotAfter  *int64 `json:"not_after,omitempty"`
 
 	Identifiers   []DBOrderIdentifier `json:"identifiers"`
 	CertificateID string              `json:"certificate_id"`
@@ -64,14 +67,14 @@ type DBCertificate struct {
 	OrderID   string `json:"order_id"`
 	AccountID string `json:"account_id"`
 
-	CertificateDER    []byte `json:"certificate_der"`
-	IssuerCertificate []byte `json:"issuer_certificate_der"`
+	Certificate []byte `json:"certificate"`
 }
 
 type DBAuthz struct {
-	ID        string `json:"id"`
-	OrderID   string `json:"order_id"`
-	AccountID string `json:"account_id"`
+	ID                 string `json:"id"`
+	OrderID            string `json:"order_id"`
+	AccountID          string `json:"account_id"`
+	ExpireValidityTime *int64 `json:"expires,omitempty"`
 
 	Status     string            `json:"status"`
 	Identifier DBOrderIdentifier `json:"identifier"`
@@ -82,6 +85,7 @@ type DBAuthz struct {
 }
 
 type DBAuthzChallenge struct {
+	ID            string `json:"id"`
 	Type          string `json:"type"`
 	Token         string `json:"token"`
 	Status        string `json:"status"`

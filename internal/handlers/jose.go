@@ -41,7 +41,7 @@ func checkJWKAlgorithmValidForAccount(alg string, key *jose.JSONWebKey) error {
 
 func extractJWS(requestBody []byte) (*jose.JSONWebSignature, *jose.Signature, error) {
 	if len(requestBody) == 0 || requestBody[0] != '{' {
-		return nil, nil, acme_controller.MalformedProblem("Invalid JSON")
+		return nil, nil, acme_controller.MalformedProblem("Invalid JWS JSON")
 	}
 
 	// we extract into here to ensure there are no dis-allowed fields
@@ -54,7 +54,7 @@ func extractJWS(requestBody []byte) (*jose.JSONWebSignature, *jose.Signature, er
 	err := json.Unmarshal(requestBody, &disallowedFields)
 	if err != nil {
 		log.WithError(err).Debug("failed to unmarshal json body")
-		return nil, nil, acme_controller.MalformedProblem("Invalid JSON")
+		return nil, nil, acme_controller.MalformedProblem("Invalid JWS JSON")
 	}
 
 	if disallowedFields.Header != nil {

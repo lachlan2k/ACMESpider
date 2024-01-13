@@ -10,6 +10,7 @@ import (
 
 func (ac ACMEController) NewAccount(payload dtos.AccountRequestDTO, jwk jose.JSONWebKey) (*db.DBAccount, error) {
 	newId, err := GenerateID()
+
 	if err != nil {
 		return nil, InternalErrorProblem(err)
 	}

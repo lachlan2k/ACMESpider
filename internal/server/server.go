@@ -1,15 +1,21 @@
-package webserver
+package server
 
 import (
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/x509"
+	"fmt"
+
 	"crypto/elliptic"
 	"crypto/rand"
+	"strings"
 
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/lego"
+	dnsProviders "github.com/go-acme/lego/v4/providers/dns"
 	"github.com/go-acme/lego/v4/registration"
 	"github.com/lachlan2k/acmespider/internal/acme_controller"
+	"github.com/lachlan2k/acmespider/internal/db"
 	"github.com/lachlan2k/acmespider/internal/handlers"
 	"github.com/lachlan2k/acmespider/internal/links"
 	"github.com/lachlan2k/acmespider/internal/nonce"
@@ -35,7 +41,17 @@ func (u *MyUser) GetPrivateKey() crypto.PrivateKey {
 	return u.key
 }
 
-func Listen(port string) {
+type Config struct {
+	Port        string
+	Email       string
+	Directory   string
+	DNSProvider string
+	DBPath      string
+	BaseURL     string
+	KeyType     certcrypto.KeyType
+}
+
+func Listen(conf Config) error {
 	app := echo.New()
 
 	app.Use(makeLoggerMiddleware())
@@ -43,37 +59,82 @@ func Listen(port string) {
 
 	acmeAPI := app.Group("/acme")
 
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	boltDb, err := db.NewBoltDb(conf.DBPath)
 	if err != nil {
-		log.Fatal(err)
+		return err
+	}
+
+	var privateKey *ecdsa.PrivateKey
+	existingMarshalledPrivateKey, err := boltDb.GetGlobalKey()
+	if err != nil {
+		if !db.IsErrNotFound(err) {
+			return err
+		}
+
+		// FIrst time, gen key
+		log.Info("Generating keypair...")
+		privateKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			return err
+		}
+
+		marshalledPrivateKey, err := x509.MarshalECPrivateKey(privateKey)
+		if err != nil {
+			return err
+		}
+		err = boltDb.SaveGlobalKey(marshalledPrivateKey)
+		if err != nil {
+			return err
+		}
+	} else {
+		log.Info("Using existing keypair...")
+		privateKey, err = x509.ParseECPrivateKey(existingMarshalledPrivateKey)
+		if err != nil {
+			return fmt.Errorf("couldn't unmarshal existing private key: %v", err)
+		}
 	}
 
 	myUser := MyUser{
-		Email: "lachlan+as@lachlan.nz",
+		Email: conf.Email,
 		key:   privateKey,
 	}
 
-	config := lego.NewConfig(&myUser)
-	config.CADirURL = "https://acme-staging-v02.api.letsencrypt.org/directory"
-	config.Certificate.KeyType = certcrypto.RSA2048
+	legoConfig := lego.NewConfig(&myUser)
+	legoConfig.CADirURL = conf.Directory
+	legoConfig.Certificate.KeyType = conf.KeyType
 
-	client, err := lego.NewClient(config)
+	legoClient, err := lego.NewClient(legoConfig)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
-	reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+	if conf.DNSProvider != "" {
+		prov, err := dnsProviders.NewDNSChallengeProviderByName(conf.DNSProvider)
+		if err != nil {
+			return err
+		}
+		legoClient.Challenge.SetDNS01Provider(prov)
+		log.Printf("Using DNS provider %s", conf.DNSProvider)
+	} else {
+		log.Printf("Using HTTP-01 for solving challenges with %s. Ensure your ACMESpider instance is accessible by your provider", conf.Directory)
+	}
+
+	reg, err := legoClient.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	myUser.Registration = reg
 
-	l := links.LinkController{
-		BaseURL: "http://localhost:" + port + "/acme",
+	fullBaseURL := conf.BaseURL
+	if !strings.HasSuffix(fullBaseURL, "/") {
+		fullBaseURL += "/"
 	}
 
-	// todo: add db
-	acmeCtrl := acme_controller.New(nil, client, l)
+	l := links.LinkController{
+		BaseURL: fullBaseURL + "acme",
+	}
+
+	acmeCtrl := acme_controller.New(boltDb, legoClient, l)
 
 	h := handlers.Handlers{
 		AcmeCtrl:  acmeCtrl,
@@ -100,12 +161,9 @@ func Listen(port string) {
 	acmeAPI.POST(l.FinalizeOrderPath(":"+l.OrderIDParam()).Relative(), h.FinalizeOrder, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
 
 	acmeAPI.POST(l.AuthzPath(":"+l.AuthzIDParam()).Relative(), h.GetAuthorization, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload, h.POSTAsGETMw)
-	acmeAPI.POST(l.ChallengePath(":"+l.AuthzIDParam(), ":"+l.ChallengeIDParam()).Relative(), h.InitiateChallenge, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload, h.ValidateJWSWithKIDAndExtractPayload)
+	acmeAPI.POST(l.ChallengePath(":"+l.ChallengeIDParam()).Relative(), h.InitiateChallenge, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
 	acmeAPI.POST(l.CertPath(":"+l.CertIDParam()).Relative(), h.GetCertificate, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload, h.POSTAsGETMw)
 	acmeAPI.POST(l.RevokeCertPath().Relative(), h.RevokeCert, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
 
-	err = app.Start(":" + port)
-	if err != nil {
-		log.Fatal(err)
-	}
+	return app.Start(":" + conf.Port)
 }

@@ -1,0 +1,4 @@
+.git
+Dockerfile
+*.db
+acmespider.db

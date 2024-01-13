@@ -10,6 +10,7 @@ import (
 	"github.com/lachlan2k/acmespider/internal/dtos"
 	"github.com/lachlan2k/acmespider/internal/links"
 	"github.com/lachlan2k/acmespider/internal/nonce"
+	"github.com/sirupsen/logrus"
 )
 
 type Handlers struct {
@@ -38,7 +39,7 @@ func (h Handlers) GetNonce(c echo.Context) error {
 }
 
 func (h Handlers) GetDirectory(c echo.Context) error {
-	return c.JSON(http.StatusOK, h.LinkCtrl.DirectoryPath())
+	return c.JSON(http.StatusOK, h.LinkCtrl.GenerateDirectory())
 }
 
 func (h Handlers) NewAccount(c echo.Context) error {
@@ -48,6 +49,7 @@ func (h Handlers) NewAccount(c echo.Context) error {
 	}
 
 	jwsHeaders, err := getProtectedHeader(c)
+
 	if err != nil {
 		return acme_controller.InternalErrorProblem(err)
 	}
@@ -61,7 +63,9 @@ func (h Handlers) NewAccount(c echo.Context) error {
 		return err
 	}
 
-	c.Request().Header.Set("Location", h.LinkCtrl.AccountPath(newAcc.ID).Abs())
+	logrus.WithField("response", h.dbAccountToDTO(newAcc)).Debug("New account created")
+
+	c.Response().Header().Set("Location", h.LinkCtrl.AccountPath(newAcc.ID).Abs())
 
 	return c.JSON(http.StatusCreated, h.dbAccountToDTO(newAcc))
 }
@@ -92,7 +96,7 @@ func (h Handlers) GetOrUpdateAccount(c echo.Context) error {
 	var updateBody dtos.AccountRequestDTO
 	err = json.Unmarshal(payload, &updateBody)
 	if err != nil {
-		return acme_controller.MalformedProblem("Invalid JSON")
+		return acme_controller.MalformedProblem("Invalid JSON2")
 	}
 
 	acc, err := h.AcmeCtrl.UpdateAccount(accountID, []byte(accIDParam), updateBody)
@@ -135,7 +139,9 @@ func (h Handlers) NewOrder(c echo.Context) error {
 		return err
 	}
 
-	c.Request().Header.Set("Location", h.LinkCtrl.OrderPath(newOrder.ID).Abs())
+	logrus.WithField("orderID", newOrder.ID).WithField("accountID", string(accountID)).Debug("New order made")
+
+	c.Response().Header().Set("Location", h.LinkCtrl.OrderPath(newOrder.ID).Abs())
 
 	return c.JSON(http.StatusCreated, h.dbOrderToDTO(newOrder))
 }
@@ -194,18 +200,37 @@ func (h Handlers) FinalizeOrder(c echo.Context) error {
 		return acme_controller.InternalErrorProblem(err)
 	}
 
+	logrus.WithField("orderID", orderID).WithField("accountID", string(accountID)).Debugf("Order finalize request made")
+
 	updatedOrder, err := h.AcmeCtrl.FinalizeOrder([]byte(orderID), *payload, accountID)
 	if err != nil {
 		return err
 	}
 
-	c.Request().Header.Set("Location", h.LinkCtrl.OrderPath(updatedOrder.ID).Abs())
+	logrus.WithField("orderID", orderID).WithField("accountID", string(accountID)).Debugf("Order finalize request returned")
+
+	c.Response().Header().Set("Location", h.LinkCtrl.OrderPath(updatedOrder.ID).Abs())
 
 	return c.JSON(http.StatusOK, h.dbOrderToDTO(updatedOrder))
 }
 
 func (h Handlers) GetAuthorization(c echo.Context) error {
-	return echo.ErrNotImplemented
+	authzID := c.Param(h.LinkCtrl.AuthzIDParam())
+	if authzID == "" {
+		return acme_controller.MalformedProblem("no authz ID")
+	}
+
+	accountID, err := getAccountID(c)
+	if err != nil {
+		return acme_controller.InternalErrorProblem(err)
+	}
+
+	authz, err := h.AcmeCtrl.GetAuthorization([]byte(authzID), accountID)
+	if err != nil {
+		return err
+	}
+
+	return c.JSON(http.StatusOK, h.dbAuthzToDTO(authz))
 }
 
 func (h Handlers) InitiateChallenge(c echo.Context) error {
@@ -227,12 +252,14 @@ func (h Handlers) InitiateChallenge(c echo.Context) error {
 		return acme_controller.InternalErrorProblem(err)
 	}
 
-	err = h.AcmeCtrl.InitiateChallenge([]byte(challID), accountID)
+	logrus.WithField("challID", challID).WithField("accountID", string(accountID)).Debug("Challenge initiated")
+
+	latestChall, err := h.AcmeCtrl.InitiateChallenge([]byte(challID), accountID)
 	if err != nil {
 		return err
 	}
 
-	return echo.ErrNotImplemented
+	return c.JSON(http.StatusOK, h.dbChallengeToDTO(latestChall))
 }
 
 func (h Handlers) GetCertificate(c echo.Context) error {

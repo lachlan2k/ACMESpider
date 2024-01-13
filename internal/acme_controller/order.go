@@ -14,6 +14,10 @@ import (
 
 const orderExpiryTime = 2 * time.Minute
 
+func (ac ACMEController) makeChallengeID(authzID string, index int) string {
+	return fmt.Sprintf("%s%02x", authzID, index)
+}
+
 func (ac ACMEController) NewOrder(payload dtos.OrderCreateRequestDTO, accountID []byte) (*db.DBOrder, error) {
 	// TODO: can we decide what orders the account is/isn't allowed to create?
 
@@ -41,13 +45,24 @@ func (ac ACMEController) NewOrder(payload dtos.OrderCreateRequestDTO, accountID 
 	}
 
 	// TODO: validate these?
-	nbf, err := dtos.TimeUnmarshalDTO(payload.NotBefore)
-	if err != nil {
+	nbfT, err := dtos.TimeUnmarshalDTO(payload.NotBefore)
+	if err != nil && payload.NotBefore != "" {
 		return nil, MalformedProblem("invalid NotBefore date format")
 	}
-	naft, err := dtos.TimeUnmarshalDTO(payload.NotAfter)
-	if err != nil {
+	naftT, err := dtos.TimeUnmarshalDTO(payload.NotAfter)
+	if err != nil && payload.NotAfter != "" {
 		return nil, MalformedProblem("invalid NotAfter date format")
+	}
+	// todo dry
+	var nbf *int64 = nil
+	if nbfT != nil {
+		nbfu := nbfT.Unix()
+		nbf = &nbfu
+	}
+	var naft *int64 = nil
+	if naftT != nil {
+		naftu := naftT.Unix()
+		naft = &naftu
 	}
 
 	expires := time.Now().Add(orderExpiryTime)
@@ -75,12 +90,18 @@ func (ac ACMEController) NewOrder(payload dtos.OrderCreateRequestDTO, accountID 
 			Status:     dtos.AuthzStatusPending,
 			Identifier: id,
 			Challenges: []db.DBAuthzChallenge{
-				db.DBAuthzChallenge{
+				{
+					ID:     ac.makeChallengeID(newAuthzID, 0),
 					Type:   HTTP01ChallengeType,
 					Token:  challengeToken,
 					Status: dtos.AuthzStatusPending,
 				},
 			},
+		}
+
+		err = ac.db.CreateAuthz(authzs[i])
+		if err != nil {
+			return nil, InternalErrorProblem(fmt.Errorf("failed to write authz %d: %v", i, err))
 		}
 	}
 
@@ -91,8 +112,8 @@ func (ac ACMEController) NewOrder(payload dtos.OrderCreateRequestDTO, accountID 
 		Status:  dtos.OrderStatusPending,
 		Expires: expires.Unix(),
 
-		NotBefore: nbf.Unix(),
-		NotAfter:  naft.Unix(),
+		NotBefore: nbf,
+		NotAfter:  naft,
 
 		Identifiers: dbIdentifiers,
 		AuthzIDs:    authzIDs,
@@ -154,7 +175,7 @@ func (ac ACMEController) FinalizeOrder(orderID []byte, payload dtos.OrderFinaliz
 		return nil, UnauthorizedProblem("")
 	}
 
-	derCSR, err := base64.URLEncoding.DecodeString(payload.CSRB64)
+	derCSR, err := base64.RawURLEncoding.DecodeString(payload.CSRB64)
 	if err != nil {
 		return nil, BadCSRProblem("Invalid CSR Base64")
 	}
@@ -175,11 +196,20 @@ func (ac ACMEController) FinalizeOrder(orderID []byte, payload dtos.OrderFinaliz
 		}
 	}
 
+	nbf := time.Time{}
+	if order.NotBefore != nil {
+		nbf = timeUnmarshalDB(*order.NotBefore)
+	}
+	naft := time.Time{}
+	if order.NotAfter != nil {
+		naft = timeUnmarshalDB(*order.NotAfter)
+	}
+
 	obtainResult, err := ac.acmeClient.Certificate.ObtainForCSR(certificate.ObtainForCSRRequest{
 		CSR:       csr,
-		NotBefore: time.Unix(order.NotBefore, 0),
-		NotAfter:  time.Unix(order.NotAfter, 0),
-		Bundle:    false,
+		NotBefore: nbf,
+		NotAfter:  naft,
+		Bundle:    true,
 		// TODO what to do with the other params in this struct?
 	})
 	if err != nil {
@@ -195,21 +225,11 @@ func (ac ACMEController) FinalizeOrder(orderID []byte, payload dtos.OrderFinaliz
 		return nil, InternalErrorProblem(fmt.Errorf("obtained certificate is empty: %v", obtainResult))
 	}
 
-	_, err = x509.ParseCertificate(obtainResult.Certificate)
-	if err != nil {
-		return nil, InternalErrorProblem(fmt.Errorf("obtained certificate is invalid: %v", err))
-	}
-	_, err = x509.ParseCertificate(obtainResult.IssuerCertificate)
-	if len(obtainResult.IssuerCertificate) > 0 && err != nil {
-		return nil, InternalErrorProblem(fmt.Errorf("obtained issuer certificate is inl"))
-	}
-
 	newCert := db.DBCertificate{
-		ID:                certID,
-		OrderID:           order.ID,
-		AccountID:         order.AccountID,
-		CertificateDER:    obtainResult.Certificate,
-		IssuerCertificate: obtainResult.IssuerCertificate,
+		ID:          certID,
+		OrderID:     order.ID,
+		AccountID:   order.AccountID,
+		Certificate: obtainResult.Certificate,
 	}
 
 	err = ac.db.CreateCertificate(newCert)
@@ -226,4 +246,20 @@ func (ac ACMEController) FinalizeOrder(orderID []byte, payload dtos.OrderFinaliz
 		return nil, InternalErrorProblem(err)
 	}
 	return newOrder, nil
+}
+
+func (ac ACMEController) GetAuthorization(authzID []byte, requesterAccountID []byte) (*db.DBAuthz, error) {
+	authz, err := ac.db.GetAuthz(authzID)
+	if err != nil {
+		if db.IsErrNotFound(err) {
+			return nil, UnauthorizedProblem("")
+		}
+		return nil, InternalErrorProblem(err)
+	}
+
+	if !bytes.Equal(requesterAccountID, []byte(authz.AccountID)) {
+		return nil, UnauthorizedProblem("")
+	}
+
+	return authz, nil
 }

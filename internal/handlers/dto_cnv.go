@@ -25,11 +25,20 @@ func (h Handlers) dbOrderToDTO(order *db.DBOrder) dtos.OrderResponseDTO {
 		authzURLs[i] = h.LinkCtrl.AuthzPath(authzID).Abs()
 	}
 
+	nbf := ""
+	if order.NotBefore != nil {
+		nbf = time64ToString(*order.NotBefore)
+	}
+	naft := ""
+	if order.NotAfter != nil {
+		naft = time64ToString(*order.NotAfter)
+	}
+
 	return dtos.OrderResponseDTO{
 		Status:            order.Status,
 		Expires:           time64ToString(order.Expires),
-		NotBefore:         time64ToString(order.NotBefore),
-		NotAfter:          time64ToString(order.NotAfter),
+		NotBefore:         nbf,
+		NotAfter:          naft,
 		Identifiers:       identifiers,
 		AuthorizationURLs: authzURLs,
 		FinalizeURL:       h.LinkCtrl.FinalizeOrderPath(order.ID).Abs(),
@@ -43,5 +52,57 @@ func (h Handlers) dbAccountToDTO(acc *db.DBAccount) dtos.AccountResponseDTO {
 		Contact:              acc.Contact,
 		OrdersURL:            h.LinkCtrl.AccountOrdersPath(acc.ID).Abs(),
 		TermsOfServiceAgreed: acc.TermsOfServiceAgreed,
+	}
+}
+
+func (h Handlers) dbIdentifierToDTO(id db.DBOrderIdentifier) dtos.AuthzIdentifierDTO {
+	return dtos.AuthzIdentifierDTO{
+		Type:  id.Type,
+		Value: id.Value,
+	}
+}
+
+func (h Handlers) dbAuthzToDTO(authz *db.DBAuthz) dtos.AuthzDTO {
+	expiresTime := ""
+	if authz.ExpireValidityTime != nil {
+		expiresTime = time64ToString(*authz.ExpireValidityTime)
+	}
+
+	dtoChallenges := make([]dtos.AuthzChallengeDTO, len(authz.Challenges))
+	for i, chall := range authz.Challenges {
+		valTime := ""
+		if chall.ValidatedTime != nil {
+			valTime = time64ToString(*chall.ValidatedTime)
+		}
+
+		dtoChallenges[i] = dtos.AuthzChallengeDTO{
+			URL:           h.LinkCtrl.ChallengePath(chall.ID).Abs(),
+			Type:          chall.Type,
+			Status:        chall.Status,
+			Token:         chall.Token,
+			ValidatedTime: valTime,
+		}
+	}
+
+	return dtos.AuthzDTO{
+		Status:     authz.Status,
+		Expires:    expiresTime,
+		Identifier: h.dbIdentifierToDTO(authz.Identifier),
+		Challenges: dtoChallenges,
+	}
+}
+
+func (h Handlers) dbChallengeToDTO(chall *db.DBAuthzChallenge) dtos.AuthzChallengeDTO {
+	valTime := ""
+	if chall.ValidatedTime != nil {
+		valTime = time64ToString(*chall.ValidatedTime)
+	}
+
+	return dtos.AuthzChallengeDTO{
+		URL:           h.LinkCtrl.ChallengePath(chall.ID).Abs(),
+		Type:          chall.Type,
+		Status:        chall.Status,
+		Token:         chall.Token,
+		ValidatedTime: valTime,
 	}
 }

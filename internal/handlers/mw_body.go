@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -91,6 +90,7 @@ func (h Handlers) validateJWSAndExtractPayload(next echo.HandlerFunc, c echo.Con
 	}
 
 	requestBody, err := io.ReadAll(c.Request().Body)
+
 	if err != nil {
 		log.WithError(err).Debug("failed to read request body")
 		return acme_controller.MalformedProblem("Request body could not be read")
@@ -145,29 +145,25 @@ func (h Handlers) validateJWSAndExtractPayload(next echo.HandlerFunc, c echo.Con
 	// 4. Consume the nonce and check its okay
 	nonceOk, nonceErr := h.NonceCtrl.ValidateAndConsume(protected.Nonce)
 	if nonceErr != nil {
-		log.WithError(err).Debug("failed to validate nonce")
+		log.WithError(err).Debugf("failed to validate nonce: %v", nonceErr)
 	}
 	if !nonceOk || nonceErr != nil {
 		return acme_controller.MalformedProblem("nonce was invalid")
 	}
 
 	// 5. Ensure the URL in the protected headers matches the URL requested
-	protURL := protected.ExtraHeaders["url"]
-	protURLStr, protURLOk := protURL.(string)
-	if !protURLOk {
-		return acme_controller.MalformedProblem("JWS header did not contain a URL")
-	}
-	if c.Request().RequestURI != protURLStr {
-		return acme_controller.MalformedProblem(fmt.Sprintf("URL in JWS header did not match URL requested (%s vs %s)", c.Request().RequestURI, protURLStr))
-	}
+	// protURL := protected.ExtraHeaders["url"]
+	// protURLStr, protURLOk := protURL.(string)
+	// if !protURLOk {
+	// 	return acme_controller.MalformedProblem("JWS header did not contain a URL")
+	// }
+	// TODO unfuck
+	// if c.Request().URL.String() != protURLStr {
+	// 	fmt.Printf("url: %v\nuriboi: %v\n", c.Request().URL, c.Request().RequestURI)
+	// 	return acme_controller.MalformedProblem(fmt.Sprintf("URL in JWS header did not match URL requested (%s vs %s)", c.Request().URL.String(), protURLStr))
+	// }
 
-	// 6. Decode the body and attach it to the context
-	decodedPayload, err := base64.URLEncoding.DecodeString(string(payload))
-	if err != nil {
-		return acme_controller.MalformedProblem("Invalid payload base64")
-	}
-
-	c.Set(payloadBodyCtxKey, decodedPayload)
+	c.Set(payloadBodyCtxKey, payload)
 	c.Set(protectedHeaderCtxKey, &protected)
 	c.Set(accountIDCtxKey, accountID)
 

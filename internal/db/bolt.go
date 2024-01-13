@@ -21,6 +21,9 @@ var (
 	accountKeysBucketName  = []byte("acme_account_keys")
 	authzsBucketName       = []byte("acme_authzs")
 	certificatesBucketName = []byte("acme_certificates")
+
+	globalKeyBucketName = []byte("global_key")
+	globalKeyK          = []byte("global_acme_k")
 )
 
 var ErrNotFound = errors.New("not found")
@@ -40,6 +43,38 @@ func (b BoltDB) Seed() error {
 			}
 		}
 		return nil
+	})
+}
+
+func (b BoltDB) GetGlobalKey() ([]byte, error) {
+	var result []byte
+	err := b.db.View(func(tx *bolt.Tx) error {
+		bucket, err := boltGetBucket(tx, globalKeyBucketName)
+		if err != nil {
+			return err
+		}
+
+		v := bucket.Get(globalKeyK)
+		if v == nil {
+			return ErrNotFound
+		}
+		result = v
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (b BoltDB) SaveGlobalKey(privateKey []byte) error {
+	return b.db.View(func(tx *bolt.Tx) error {
+		bucket, err := boltGetBucket(tx, globalKeyBucketName)
+		if err != nil {
+			return err
+		}
+
+		return bucket.Put(globalKeyK, privateKey)
 	})
 }
 
@@ -179,7 +214,7 @@ func (b BoltDB) GetAccount(accountID []byte) (*DBAccount, error) {
 }
 func (b BoltDB) CreateAccount(account DBAccount, jwk *jose.JSONWebKey) error {
 	return b.db.Update(func(tx *bolt.Tx) error {
-		err := boltSaver[DBAccount](b.db, accountsBucketName, []byte(account.ID), &account)
+		err := boltSaverTx[DBAccount](tx, accountsBucketName, []byte(account.ID), &account)
 		if err != nil {
 			return err
 		}

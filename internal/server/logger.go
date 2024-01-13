@@ -1,4 +1,4 @@
-package webserver
+package server
 
 import (
 	"errors"
@@ -36,13 +36,12 @@ func makeLoggerMiddleware() echo.MiddlewareFunc {
 				}
 
 				if values.Error != nil {
-					var wrapped acme_controller.ProblemDetails
+					wrapped := &acme_controller.ProblemDetails{}
 					if errors.As(values.Error, &wrapped) {
 						log.WithError(wrapped.Unwrap()).WithFields(fields).WithField("error_id", wrapped.ID()).Error("request error " + wrapped.ID())
 						return nil
 					}
-
-					log.WithError(values.Error).WithFields(fields).Error("request error")
+					log.WithError(values.Error).WithFields(fields).Error("generic request error")
 					return nil
 				}
 

@@ -30,31 +30,45 @@ func (ac ACMEController) splitChallengeID(challID []byte) (authzID []byte, chall
 	return
 }
 
-func (ac ACMEController) InitiateChallenge(challID []byte, requesterAccountID []byte) error {
+func (ac ACMEController) InitiateChallenge(challID []byte, requesterAccountID []byte) (*db.DBAuthzChallenge, error) {
 	authzID, challengeIndex, err := ac.splitChallengeID(challID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	authz, err := ac.db.GetAuthz(authzID)
 	if err != nil {
-		return UnauthorizedProblem("")
+		return nil, UnauthorizedProblem("")
 	}
 
 	if !bytes.Equal(requesterAccountID, []byte(authz.AccountID)) {
-		return UnauthorizedProblem("")
+		return nil, UnauthorizedProblem("")
 	}
 
 	if challengeIndex >= len(authz.Challenges) {
-		return NotFoundProblem("Unknown challenge ID")
+		return nil, NotFoundProblem("Unknown challenge ID")
 	}
 
 	order, err := ac.db.GetOrder([]byte(authz.OrderID))
 	if err != nil {
-		return InternalErrorProblem(fmt.Errorf("failed to get order when initiating challenge: %v", err))
+		return nil, InternalErrorProblem(fmt.Errorf("failed to get order when initiating challenge: %v", err))
 	}
 
-	return ac.doHTTP01ChallengeVerifyLoop(order, authz, challengeIndex)
+	err = ac.startHTTP01Challenge(order, authz, challengeIndex)
+	if err != nil {
+		return nil, err
+	}
+
+	latestAuthz, err := ac.db.GetAuthz(authzID)
+	if err != nil {
+		return nil, InternalErrorProblem(fmt.Errorf("failed to get latest authz: %v", err))
+	}
+
+	if challengeIndex >= len(latestAuthz.Challenges) {
+		return nil, InternalErrorProblem(fmt.Errorf("challenge index on latestAuthz was unexpectedlty out of bounds"))
+	}
+	chall := latestAuthz.Challenges[challengeIndex]
+	return &chall, nil
 }
 
 func (ac ACMEController) recomputeOrderStatus(orderID []byte) error {

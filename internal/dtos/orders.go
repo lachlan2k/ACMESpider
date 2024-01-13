@@ -25,8 +25,8 @@ type OrderResponseDTO struct {
 	Status  string `json:"status"`
 	Expires string `json:"expires"`
 
-	NotBefore string `json:"notBefore"`
-	NotAfter  string `json:"notAfter"`
+	NotBefore string `json:"notBefore,omitempty"`
+	NotAfter  string `json:"notAfter,omitempty"`
 
 	Identifiers []OrderIdentifierDTO `json:"identifiers"`
 
