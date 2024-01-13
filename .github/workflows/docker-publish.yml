@@ -1,5 +1,4 @@
-name: Docker Build & Publish API and Frontend
-
+name: Docker Build & Publish
 on:
   schedule:
     - cron: '18 11 * * *'
@@ -12,7 +11,6 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-
 
 jobs:
   build:
@@ -49,14 +47,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract Docker API metadata
+      - name: Extract Docker metadata
         id: docker-meta
         uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
 
-      - name: Build and push API Docker image
-        id: build-and-push-api
+      - name: Build and push Docker image
+        id: build-and-push
         uses: docker/build-push-action@ac9327eae2b366085ac7f6a2d02df8aa8ead720a
         with:
           context: .
@@ -67,9 +65,9 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Sign the published API Docker image
+      - name: Sign the published Docker image
         if: ${{ github.event_name != 'pull_request' }}
         env:
           TAGS: ${{ steps.docker-meta.outputs.tags }}
-          DIGEST: ${{ steps.build-and-push-api.outputs.digest }}
+          DIGEST: ${{ steps.build-and-push.outputs.digest }}
         run: echo "${TAGS}" | xargs -I {} cosign sign --yes {}@${DIGEST}
