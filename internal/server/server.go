@@ -169,9 +169,11 @@ func Listen(conf Config) error {
 	acmeAPI.POST(l.RevokeCertPath().Relative(), h.RevokeCert, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
 
 	if !conf.UseTLS {
+		log.Info("Listening on plain HTTP...")
 		return app.Start(":" + conf.Port)
 	}
 
+	log.Info("Configuring certmagic and listening with TLS...")
 	certmagic.DefaultACME.DNS01Solver = solverWrapper{
 		legoProvider: prov,
 	}
@@ -201,7 +203,6 @@ type solverWrapper struct {
 func (s solverWrapper) Present(ctx context.Context, chall mhAcme.Challenge) error {
 	return s.legoProvider.Present(chall.Identifier.Value, chall.Token, chall.KeyAuthorization)
 }
-
 func (s solverWrapper) CleanUp(ctx context.Context, chall mhAcme.Challenge) error {
 	return s.legoProvider.CleanUp(chall.Identifier.Value, chall.Token, chall.KeyAuthorization)
 }

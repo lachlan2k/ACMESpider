@@ -3,3 +3,4 @@ test.sh
 test/
 acmespider.db
 main
+.env
