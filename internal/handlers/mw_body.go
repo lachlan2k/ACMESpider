@@ -152,16 +152,14 @@ func (h Handlers) validateJWSAndExtractPayload(next echo.HandlerFunc, c echo.Con
 	}
 
 	// 5. Ensure the URL in the protected headers matches the URL requested
-	// protURL := protected.ExtraHeaders["url"]
-	// protURLStr, protURLOk := protURL.(string)
-	// if !protURLOk {
-	// 	return acme_controller.MalformedProblem("JWS header did not contain a URL")
-	// }
-	// TODO unfuck
-	// if c.Request().URL.String() != protURLStr {
-	// 	fmt.Printf("url: %v\nuriboi: %v\n", c.Request().URL, c.Request().RequestURI)
-	// 	return acme_controller.MalformedProblem(fmt.Sprintf("URL in JWS header did not match URL requested (%s vs %s)", c.Request().URL.String(), protURLStr))
-	// }
+	protURL := protected.ExtraHeaders["url"]
+	protURLStr, protURLOk := protURL.(string)
+	if !protURLOk {
+		return acme_controller.MalformedProblem("JWS header did not contain a URL")
+	}
+	if !h.LinkCtrl.CompareURL(c.Request().RequestURI, protURLStr) {
+		return acme_controller.MalformedProblem(fmt.Sprintf("URL in JWS header did not match URL requested (%s vs %s)", c.Request().URL.String(), protURLStr))
+	}
 
 	c.Set(payloadBodyCtxKey, payload)
 	c.Set(protectedHeaderCtxKey, &protected)

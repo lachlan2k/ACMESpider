@@ -34,6 +34,11 @@ func (l LinkController) Path(relative string) Path {
 	}
 }
 
+func (l LinkController) CompareURL(requestPath string, toCompare string) bool {
+	baseWithoutAcme := strings.TrimSuffix(l.BaseURL, "/acme")
+	return (baseWithoutAcme + requestPath) == toCompare
+}
+
 func (l LinkController) NewNoncePath() Path {
 	return l.Path("new-nonce")
 }

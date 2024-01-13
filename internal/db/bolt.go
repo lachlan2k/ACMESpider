@@ -47,7 +47,7 @@ func (b BoltDB) Seed() error {
 }
 
 func (b BoltDB) GetGlobalKey() ([]byte, error) {
-	var result []byte
+	var result []byte = nil
 	err := b.db.View(func(tx *bolt.Tx) error {
 		bucket, err := boltGetBucket(tx, globalKeyBucketName)
 		if err != nil {
@@ -68,7 +68,7 @@ func (b BoltDB) GetGlobalKey() ([]byte, error) {
 }
 
 func (b BoltDB) SaveGlobalKey(privateKey []byte) error {
-	return b.db.View(func(tx *bolt.Tx) error {
+	return b.db.Update(func(tx *bolt.Tx) error {
 		bucket, err := boltGetBucket(tx, globalKeyBucketName)
 		if err != nil {
 			return err
@@ -123,7 +123,10 @@ func boltGetBucket(tx *bolt.Tx, bucketName []byte) (*bolt.Bucket, error) {
 
 	bucket, err := tx.CreateBucket(bucketName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to make bucket %s: %v", bucketName, err)
+		if errors.Is(err, bolt.ErrTxNotWritable) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to make bucket %s: %w", bucketName, err)
 	}
 	return bucket, nil
 }
@@ -134,7 +137,7 @@ func boltUpdator[DbT any](db *bolt.DB, bucketName []byte, key []byte, updateCall
 	err := db.Update(func(tx *bolt.Tx) error {
 		bucket, err := boltGetBucket(tx, bucketName)
 		if err != nil {
-			return err
+			return ErrNotFound
 		}
 
 		v := bucket.Get(key)
