@@ -1,15 +1,19 @@
 package server
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/x509"
 	"fmt"
+	"net/http"
 
 	"crypto/elliptic"
 	"crypto/rand"
 	"strings"
 
+	"github.com/caddyserver/certmagic"
+	"github.com/go-acme/lego/challenge"
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/lego"
 	dnsProviders "github.com/go-acme/lego/v4/providers/dns"
@@ -19,6 +23,7 @@ import (
 	"github.com/lachlan2k/acmespider/internal/handlers"
 	"github.com/lachlan2k/acmespider/internal/links"
 	"github.com/lachlan2k/acmespider/internal/nonce"
+	mhAcme "github.com/mholt/acmez/acme"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -44,10 +49,12 @@ func (u *MyUser) GetPrivateKey() crypto.PrivateKey {
 type Config struct {
 	Port        string
 	Email       string
-	Directory   string
+	CADirectory string
 	DNSProvider string
 	DBPath      string
 	BaseURL     string
+	UseTLS      bool
+	Hostname    string
 	KeyType     certcrypto.KeyType
 }
 
@@ -100,7 +107,7 @@ func Listen(conf Config) error {
 	}
 
 	legoConfig := lego.NewConfig(&myUser)
-	legoConfig.CADirURL = conf.Directory
+	legoConfig.CADirURL = conf.CADirectory
 	legoConfig.Certificate.KeyType = conf.KeyType
 
 	legoClient, err := lego.NewClient(legoConfig)
@@ -108,16 +115,12 @@ func Listen(conf Config) error {
 		return err
 	}
 
-	if conf.DNSProvider != "" {
-		prov, err := dnsProviders.NewDNSChallengeProviderByName(conf.DNSProvider)
-		if err != nil {
-			return err
-		}
-		legoClient.Challenge.SetDNS01Provider(prov)
-		log.Printf("Using DNS provider %s", conf.DNSProvider)
-	} else {
-		log.Printf("Using HTTP-01 for solving challenges with %s. Ensure your ACMESpider instance is accessible by your provider", conf.Directory)
+	prov, err := dnsProviders.NewDNSChallengeProviderByName(conf.DNSProvider)
+	if err != nil {
+		return err
 	}
+	legoClient.Challenge.SetDNS01Provider(prov)
+	log.Infof("Using DNS provider %s", conf.DNSProvider)
 
 	reg, err := legoClient.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
 	if err != nil {
@@ -165,5 +168,40 @@ func Listen(conf Config) error {
 	acmeAPI.POST(l.CertPath(":"+l.CertIDParam()).Relative(), h.GetCertificate, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload, h.POSTAsGETMw)
 	acmeAPI.POST(l.RevokeCertPath().Relative(), h.RevokeCert, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
 
-	return app.Start(":" + conf.Port)
+	if !conf.UseTLS {
+		return app.Start(":" + conf.Port)
+	}
+
+	certmagic.DefaultACME.DNS01Solver = solverWrapper{
+		legoProvider: prov,
+	}
+	certmagic.DefaultACME.Email = conf.Email
+	certmagic.DefaultACME.DisableHTTPChallenge = true
+	certmagic.DefaultACME.DisableTLSALPNChallenge = true
+	certmagic.DefaultACME.CA = conf.CADirectory
+	certmagic.DefaultACME.Agreed = true
+
+	tlsConf, err := certmagic.TLS([]string{conf.Hostname})
+	if err != nil {
+		return err
+	}
+
+	s := http.Server{
+		Addr:      ":" + conf.Port,
+		Handler:   app,
+		TLSConfig: tlsConf,
+	}
+	return s.ListenAndServeTLS("", "")
+}
+
+type solverWrapper struct {
+	legoProvider challenge.Provider
+}
+
+func (s solverWrapper) Present(ctx context.Context, chall mhAcme.Challenge) error {
+	return s.legoProvider.Present(chall.Identifier.Value, chall.Token, chall.KeyAuthorization)
+}
+
+func (s solverWrapper) CleanUp(ctx context.Context, chall mhAcme.Challenge) error {
+	return s.legoProvider.CleanUp(chall.Identifier.Value, chall.Token, chall.KeyAuthorization)
 }

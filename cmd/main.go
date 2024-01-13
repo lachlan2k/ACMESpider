@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
+	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/lachlan2k/acmespider/internal/server"
 	log "github.com/sirupsen/logrus"
@@ -13,12 +15,40 @@ import (
 )
 
 const envPort = "ACMESPIDER_PORT"
+const envUseTLS = "ACMESPIDER_TLS"
+const envBaseURL = "ACMESPIDER_BASE_URL"
+const envHost = "ACMESPIDER_HOSTNAME"
+const envDBPath = "ACMESPIDER_DB_PATH"
+
 const envACMEDNSProvider = "ACMESPIDER_DNS_PROVIDER"
 const envACMEDirectory = "ACMESPIDER_ACME_DIRECTORY"
 const envACMETOSAccept = "ACMESPIDER_ACME_TOS_ACCEPT"
 const envACMEEmail = "ACMESPIDER_ACME_EMAIL"
-const envBaseURL = "ACMESPIDER_BASE_URL"
-const envDBPath = "ACMESPIDER_DB_PATH"
+const envACMEKeyType = "ACMESPIDER_KEY_TYPE"
+
+func strIsTruthy(str string) bool {
+	l := strings.TrimSpace(strings.ToLower(os.Getenv(envACMETOSAccept)))
+	return l == "yes" || l == "true" || l == "1"
+}
+
+func getKeytype(keystr string) certcrypto.KeyType {
+	l := strings.TrimSpace(strings.ToLower(os.Getenv(envACMETOSAccept)))
+	switch l {
+	case "rsa", "rsa2048":
+		return certcrypto.RSA2048
+	case "rsa3072":
+		return certcrypto.RSA3072
+	case "rsa4096":
+		return certcrypto.RSA4096
+	case "rsa8192":
+		return certcrypto.RSA8192
+	case "ec256":
+		return certcrypto.EC256
+	case "ec384":
+		return certcrypto.EC384
+	}
+	return certcrypto.RSA2048
+}
 
 func runServe(cCtx *cli.Context) error {
 	port := os.Getenv(envPort)
@@ -26,14 +56,48 @@ func runServe(cCtx *cli.Context) error {
 		port = "443"
 	}
 
-	lcTosAccept := strings.TrimSpace(strings.ToLower(os.Getenv(envACMETOSAccept)))
-	if lcTosAccept != "yes" && lcTosAccept != "true" && lcTosAccept != "1" {
-		return fmt.Errorf("Please indicate that you accept the terms-of-service for your ACME provider by setting %s=true", envACMETOSAccept)
+	useTLS := false
+	useTLSStr := os.Getenv(envUseTLS)
+	if strIsTruthy(useTLSStr) || (useTLSStr == "" && port == "443") {
+		useTLS = true
+	}
+
+	if !strIsTruthy(os.Getenv(envACMETOSAccept)) {
+		return fmt.Errorf("please indicate that you accept the terms-of-service for your ACME provider by setting %s=true", envACMETOSAccept)
 	}
 
 	baseURL := os.Getenv(envBaseURL)
-	if baseURL == "" {
-		return fmt.Errorf("Please provide a base URL in %s", envBaseURL)
+	hostname := os.Getenv(envHost)
+
+	hasHostname := hostname != ""
+	hasBaseurl := baseURL != ""
+
+	if !hasHostname && !hasBaseurl {
+		return fmt.Errorf("please provide a base URL in %s and/or a hostname in %s", envBaseURL, envHost)
+	}
+
+	if hasBaseurl && !hasHostname {
+		parsed, err := url.Parse(baseURL)
+		if err != nil {
+			return fmt.Errorf("failed to parse provided baseurl: %v", err)
+		}
+		hostname = parsed.Host
+		log.Infof("Using hostname %q for TLS, parsed from base URL", hostname)
+	} else if hasHostname && !hasBaseurl {
+		scheme := "http"
+		if useTLS {
+			scheme = "https"
+		}
+		hostForURL := hostname
+		if (scheme == "http" && port != "80") || (scheme == "https" && port != "443") {
+			hostForURL += ":" + port
+		}
+
+		baseURL = (&url.URL{
+			Scheme: scheme,
+			Host:   hostForURL,
+		}).String()
+		log.Infof("Using base URL %q calculated from host, port, and scheme", baseURL)
 	}
 
 	dnsProv := os.Getenv(envACMEDNSProvider)
@@ -57,10 +121,13 @@ func runServe(cCtx *cli.Context) error {
 	return server.Listen(server.Config{
 		Port:        port,
 		Email:       acmeEmail,
-		Directory:   acmeDirectory,
+		CADirectory: acmeDirectory,
 		DNSProvider: dnsProv,
 		BaseURL:     baseURL,
 		DBPath:      dbPath,
+		UseTLS:      useTLS,
+		Hostname:    hostname,
+		KeyType:     getKeytype(os.Getenv(envACMEKeyType)),
 	})
 }
 
