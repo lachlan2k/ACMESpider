@@ -9,7 +9,7 @@ COPY . .
 RUN go build -o acmespider cmd/main.go
 
 # Runtime
-FROM redhat/ubi9-micro AS runtime
+FROM redhat/ubi9-minimal AS runtime
 
 WORKDIR /app
 COPY --from=builder /app/acmespider .
