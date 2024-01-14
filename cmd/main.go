@@ -20,6 +20,7 @@ const envBaseURL = "ACMESPIDER_BASE_URL"
 const envHost = "ACMESPIDER_HOSTNAME"
 const envDBPath = "ACMESPIDER_DB_PATH"
 
+const envACMEPublicResolvers = "ACMESPIDER_PUBLIC_RESOLVERS"
 const envACMEDNSProvider = "ACMESPIDER_DNS_PROVIDER"
 const envACMEDirectory = "ACMESPIDER_ACME_CA_DIRECTORY"
 const envACMETOSAccept = "ACMESPIDER_ACME_TOS_ACCEPT"
@@ -118,16 +119,25 @@ func runServe(cCtx *cli.Context) error {
 		dbPath = "./acmespider.db"
 	}
 
+	dnsServerStr := os.Getenv(envACMEPublicResolvers)
+	publicServers := []string{"1.1.1.1", "8.8.8.8"}
+	if dnsServerStr != "" {
+		publicServers = strings.Split(dnsServerStr, ",")
+	} else {
+		log.Infof("Using default public DNS resolvers of %v", publicServers)
+	}
+
 	return server.Listen(server.Config{
-		Port:        port,
-		Email:       acmeEmail,
-		CADirectory: acmeDirectory,
-		DNSProvider: dnsProv,
-		BaseURL:     baseURL,
-		DBPath:      dbPath,
-		UseTLS:      useTLS,
-		Hostname:    hostname,
-		KeyType:     getKeytype(os.Getenv(envACMEKeyType)),
+		Port:               port,
+		Email:              acmeEmail,
+		CADirectory:        acmeDirectory,
+		DNSProvider:        dnsProv,
+		BaseURL:            baseURL,
+		DBPath:             dbPath,
+		UseTLS:             useTLS,
+		Hostname:           hostname,
+		KeyType:            getKeytype(os.Getenv(envACMEKeyType)),
+		PublicDNSResolvers: publicServers,
 	})
 }
 

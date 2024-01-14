@@ -15,6 +15,7 @@ import (
 	"github.com/caddyserver/certmagic"
 	"github.com/go-acme/lego/challenge"
 	"github.com/go-acme/lego/v4/certcrypto"
+	"github.com/go-acme/lego/v4/challenge/dns01"
 	"github.com/go-acme/lego/v4/lego"
 	dnsProviders "github.com/go-acme/lego/v4/providers/dns"
 	"github.com/go-acme/lego/v4/registration"
@@ -47,15 +48,16 @@ func (u *MyUser) GetPrivateKey() crypto.PrivateKey {
 }
 
 type Config struct {
-	Port        string
-	Email       string
-	CADirectory string
-	DNSProvider string
-	DBPath      string
-	BaseURL     string
-	UseTLS      bool
-	Hostname    string
-	KeyType     certcrypto.KeyType
+	PublicDNSResolvers []string
+	Port               string
+	Email              string
+	CADirectory        string
+	DNSProvider        string
+	DBPath             string
+	BaseURL            string
+	UseTLS             bool
+	Hostname           string
+	KeyType            certcrypto.KeyType
 }
 
 func Listen(conf Config) error {
@@ -119,7 +121,7 @@ func Listen(conf Config) error {
 	if err != nil {
 		return err
 	}
-	legoClient.Challenge.SetDNS01Provider(prov)
+	legoClient.Challenge.SetDNS01Provider(prov, dns01.AddRecursiveNameservers(conf.PublicDNSResolvers))
 	log.Infof("Using DNS provider %s", conf.DNSProvider)
 
 	reg, err := legoClient.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
