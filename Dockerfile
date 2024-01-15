@@ -15,6 +15,6 @@ WORKDIR /app
 COPY --from=builder /app/acmespider .
 
 ENV ACMESPIDER_PORT=443
-ENV ACMESPIDER_DB_PATH=/data/acmespider.db
+ENV ACMESPIDER_STORAGE_PATH=/data
 
 ENTRYPOINT [ "/app/acmespider", "serve" ]

@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net/http"
+	"path"
 
 	"crypto/elliptic"
 	"crypto/rand"
@@ -54,7 +55,7 @@ type Config struct {
 	Email              string
 	CADirectory        string
 	DNSProvider        string
-	DBPath             string
+	StoragePath        string
 	BaseURL            string
 	UseTLS             bool
 	Hostname           string
@@ -69,7 +70,7 @@ func Listen(conf Config) error {
 
 	acmeAPI := app.Group("/acme")
 
-	boltDb, err := db.NewBoltDb(conf.DBPath)
+	boltDb, err := db.NewBoltDb(conf.StoragePath + "acmespider.db")
 	if err != nil {
 		return err
 	}
@@ -195,6 +196,9 @@ func Listen(conf Config) error {
 			Bytes: marshalledPrivateKey,
 		},
 	))
+	certmagic.Default.Storage = &certmagic.FileStorage{
+		Path: path.Join(conf.StoragePath, "certmagic"),
+	}
 
 	tlsConf, err := certmagic.TLS([]string{conf.Hostname})
 	if err != nil {

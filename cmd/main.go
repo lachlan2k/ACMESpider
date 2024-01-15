@@ -18,7 +18,7 @@ const envPort = "ACMESPIDER_PORT"
 const envUseTLS = "ACMESPIDER_TLS"
 const envBaseURL = "ACMESPIDER_BASE_URL"
 const envHost = "ACMESPIDER_HOSTNAME"
-const envDBPath = "ACMESPIDER_DB_PATH"
+const envStoragePath = "ACMESPIDER_STORAGE_PATH"
 
 const envACMEPublicResolvers = "ACMESPIDER_PUBLIC_RESOLVERS"
 const envACMEDNSProvider = "ACMESPIDER_DNS_PROVIDER"
@@ -114,9 +114,9 @@ func runServe(cCtx *cli.Context) error {
 		log.Warnf("No email was provided to %s. Most ACME providers require this, please consider setting one.", envACMEEmail)
 	}
 
-	dbPath := os.Getenv(envDBPath)
-	if dbPath == "" {
-		dbPath = "./acmespider.db"
+	storagepath := os.Getenv(envStoragePath)
+	if storagepath == "" {
+		storagepath = "./"
 	}
 
 	dnsServerStr := os.Getenv(envACMEPublicResolvers)
@@ -133,7 +133,7 @@ func runServe(cCtx *cli.Context) error {
 		CADirectory:        acmeDirectory,
 		DNSProvider:        dnsProv,
 		BaseURL:            baseURL,
-		DBPath:             dbPath,
+		StoragePath:        storagepath,
 		UseTLS:             useTLS,
 		Hostname:           hostname,
 		KeyType:            getKeytype(os.Getenv(envACMEKeyType)),
