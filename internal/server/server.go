@@ -70,7 +70,7 @@ func Listen(conf Config) error {
 
 	acmeAPI := app.Group("/acme")
 
-	boltDb, err := db.NewBoltDb(conf.StoragePath + "acmespider.db")
+	boltDb, err := db.NewBoltDb(path.Join(conf.StoragePath, "acmespider.db"))
 	if err != nil {
 		return err
 	}
