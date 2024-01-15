@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 
@@ -102,6 +103,10 @@ func Listen(conf Config) error {
 			return fmt.Errorf("couldn't unmarshal existing private key: %v", err)
 		}
 	}
+	marshalledPrivateKey, err := x509.MarshalECPrivateKey(privateKey)
+	if err != nil {
+		return err
+	}
 
 	myUser := MyUser{
 		Email: conf.Email,
@@ -184,6 +189,12 @@ func Listen(conf Config) error {
 	certmagic.DefaultACME.DisableTLSALPNChallenge = true
 	certmagic.DefaultACME.CA = conf.CADirectory
 	certmagic.DefaultACME.Agreed = true
+	certmagic.DefaultACME.AccountKeyPEM = string(pem.EncodeToMemory(
+		&pem.Block{
+			Type:  "EC PRIVATE KEY",
+			Bytes: marshalledPrivateKey,
+		},
+	))
 
 	tlsConf, err := certmagic.TLS([]string{conf.Hostname})
 	if err != nil {
