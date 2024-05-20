@@ -7,11 +7,14 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"net"
 	"net/http"
 	"path"
+	"time"
 
 	"crypto/elliptic"
 	"crypto/rand"
+	mrand "math/rand"
 	"strings"
 
 	"github.com/caddyserver/certmagic"
@@ -184,6 +187,7 @@ func Listen(conf Config) error {
 	log.Info("Configuring certmagic and listening with TLS...")
 	certmagic.DefaultACME.DNS01Solver = solverWrapper{
 		legoProvider: prov,
+		resolvers:    conf.PublicDNSResolvers,
 	}
 	certmagic.DefaultACME.Email = conf.Email
 	certmagic.DefaultACME.DisableHTTPChallenge = true
@@ -215,6 +219,7 @@ func Listen(conf Config) error {
 
 type solverWrapper struct {
 	legoProvider challenge.Provider
+	resolvers    []string
 }
 
 func (s solverWrapper) Present(ctx context.Context, chall mhAcme.Challenge) error {
@@ -222,4 +227,58 @@ func (s solverWrapper) Present(ctx context.Context, chall mhAcme.Challenge) erro
 }
 func (s solverWrapper) CleanUp(ctx context.Context, chall mhAcme.Challenge) error {
 	return s.legoProvider.CleanUp(chall.Identifier.Value, chall.Token, chall.KeyAuthorization)
+}
+func (s solverWrapper) Wait(inCtx context.Context, chall mhAcme.Challenge) error {
+	info := dns01.GetChallengeInfo(chall.Identifier.Value, chall.KeyAuthorization)
+	fqdn := info.EffectiveFQDN
+
+	timeout := 300 * time.Second
+	interval := 30 * time.Second
+
+	ctx, cancel := context.WithDeadline(inCtx, time.Now().Add(timeout))
+	defer cancel()
+
+	log.WithField("fqdn", fqdn).WithField("value", info.Value).Debug("Starting DNS record propagation check")
+
+	r := net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			resolver := s.resolvers[mrand.Intn(len(s.resolvers))]
+			if !strings.Contains(resolver, ":") {
+				resolver = resolver + ":53"
+			}
+
+			d := net.Dialer{
+				Timeout: time.Second * 10,
+			}
+			return d.DialContext(ctx, network, resolver)
+		},
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.WithField("fqdn", fqdn).Debug("Timed out waiting for ACME DNS record propagation")
+			return nil
+		case <-time.After(interval):
+		}
+
+		lookupCtx, cancelLookup := context.WithDeadline(context.Background(), time.Now().Add(10*time.Second))
+		defer cancelLookup()
+
+		log.WithField("fqdn", fqdn).Debug("Looking up record for ACME verification to check propagation")
+		answers, err := r.LookupTXT(lookupCtx, fqdn)
+		if err != nil {
+			log.WithField("fqdn", fqdn).WithError(err).Debug("Failed to lookup ACME record")
+			continue
+		}
+
+		for _, ans := range answers {
+			if ans == info.Value {
+				log.WithField("fqdn", fqdn).Debug("ACME record propagated!")
+				return nil
+			}
+			log.WithField("fqdn", fqdn).WithField("exepcted_value", info.Value).WithField("found_value", ans).Debug("TXT result didn't match")
+		}
+	}
 }
