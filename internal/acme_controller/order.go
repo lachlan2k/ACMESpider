@@ -10,6 +10,7 @@ import (
 	"github.com/go-acme/lego/v4/certificate"
 	"github.com/lachlan2k/acmespider/internal/db"
 	"github.com/lachlan2k/acmespider/internal/dtos"
+	log "github.com/sirupsen/logrus"
 )
 
 const orderExpiryTime = 2 * time.Minute
@@ -162,6 +163,66 @@ func (ac ACMEController) GetOrdersByAccountID(accountIDToQuery []byte, requester
 	return orders, nil
 }
 
+func (ac ACMEController) processOrder(order *db.DBOrder, csr *x509.CertificateRequest, nbf time.Time, naft time.Time) error {
+	obtainResult, err := ac.acmeClient.Certificate.ObtainForCSR(certificate.ObtainForCSRRequest{
+		CSR:       csr,
+		NotBefore: nbf,
+		NotAfter:  naft,
+		Bundle:    true,
+		// TODO what to do with the other params in this struct?
+	})
+	if err != nil {
+		return err
+	}
+
+	certID, err := GenerateID()
+	if err != nil {
+		return err
+	}
+
+	if len(obtainResult.Certificate) == 0 {
+		return fmt.Errorf("obtained certificate is empty: %v", obtainResult)
+	}
+
+	newCert := db.DBCertificate{
+		ID:          certID,
+		OrderID:     order.ID,
+		AccountID:   order.AccountID,
+		Certificate: obtainResult.Certificate,
+	}
+
+	err = ac.db.CreateCertificate(newCert)
+	if err != nil {
+		return err
+	}
+
+	_, err = ac.db.UpdateOrder([]byte(order.ID), func(orderToUpdate *db.DBOrder) error {
+		orderToUpdate.CertificateID = certID
+		orderToUpdate.Status = dtos.OrderStatusValid
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (ac ACMEController) startProcessing(order *db.DBOrder, csr *x509.CertificateRequest, nbf time.Time, naft time.Time) {
+	go func() {
+		err := ac.processOrder(order, csr, nbf, naft)
+		if err != nil {
+			wrapped := InternalErrorProblem(err)
+			log.WithError(wrapped.Unwrap()).WithField("error_id", wrapped.ID()).Error("order processing error " + wrapped.ID())
+
+			ac.db.UpdateOrder([]byte(order.ID), func(orderToUpdate *db.DBOrder) error {
+				orderToUpdate.Status = dtos.OrderStatusInvalid
+				orderToUpdate.ErrorID = wrapped.ID()
+				return nil
+			})
+		}
+	}()
+}
+
 func (ac ACMEController) FinalizeOrder(orderID []byte, payload dtos.OrderFinalizeRequestDTO, requestersAccountID []byte) (*db.DBOrder, error) {
 	order, err := ac.db.GetOrder([]byte(orderID))
 	if err != nil {
@@ -205,47 +266,17 @@ func (ac ACMEController) FinalizeOrder(orderID []byte, payload dtos.OrderFinaliz
 		naft = timeUnmarshalDB(*order.NotAfter)
 	}
 
-	obtainResult, err := ac.acmeClient.Certificate.ObtainForCSR(certificate.ObtainForCSRRequest{
-		CSR:       csr,
-		NotBefore: nbf,
-		NotAfter:  naft,
-		Bundle:    true,
-		// TODO what to do with the other params in this struct?
-	})
-	if err != nil {
-		return nil, InternalErrorProblem(err)
-	}
-
-	certID, err := GenerateID()
-	if err != nil {
-		return nil, InternalErrorProblem(err)
-	}
-
-	if len(obtainResult.Certificate) == 0 {
-		return nil, InternalErrorProblem(fmt.Errorf("obtained certificate is empty: %v", obtainResult))
-	}
-
-	newCert := db.DBCertificate{
-		ID:          certID,
-		OrderID:     order.ID,
-		AccountID:   order.AccountID,
-		Certificate: obtainResult.Certificate,
-	}
-
-	err = ac.db.CreateCertificate(newCert)
-	if err != nil {
-		return nil, InternalErrorProblem(err)
-	}
-
-	newOrder, err := ac.db.UpdateOrder([]byte(order.ID), func(orderToUpdate *db.DBOrder) error {
-		orderToUpdate.CertificateID = certID
-		orderToUpdate.Status = dtos.OrderStatusValid
+	orderWithProcessing, err := ac.db.UpdateOrder([]byte(order.ID), func(orderToUpdate *db.DBOrder) error {
+		orderToUpdate.Status = dtos.OrderStatusProcessing
 		return nil
 	})
 	if err != nil {
 		return nil, InternalErrorProblem(err)
 	}
-	return newOrder, nil
+
+	ac.startProcessing(order, csr, nbf, naft)
+
+	return orderWithProcessing, nil
 }
 
 func (ac ACMEController) GetAuthorization(authzID []byte, requesterAccountID []byte) (*db.DBAuthz, error) {

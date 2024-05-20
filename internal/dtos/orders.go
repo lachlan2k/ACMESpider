@@ -1,10 +1,12 @@
 package dtos
 
 const (
-	OrderStatusPending = "pending"
-	OrderStatusValid   = "valid"
-	OrderStatusReady   = "ready"
-	OrderStatusExpired = "expired"
+	OrderStatusPending    = "pending"
+	OrderStatusProcessing = "processing"
+	OrderStatusValid      = "valid"
+	OrderStatusInvalid    = "invalid"
+	OrderStatusReady      = "ready"
+	OrderStatusExpired    = "expired"
 )
 
 type OrderCreateRequestDTO struct {
@@ -21,6 +23,19 @@ type OrdersListResponseDTO struct {
 	Orders []string `json:"orders"`
 }
 
+type ProblemDTO struct {
+	Type        string                   `json:"type,omitempty"`
+	Detail      string                   `json:"detail,omitempty"`
+	HTTPStatus  int                      `json:"status,omitempty"`
+	Identifier  *IdentifierForProblemDTO `json:"identifier,omitempty"`
+	Subproblems []ProblemDTO             `json:"subproblems,omitempty"`
+}
+
+type IdentifierForProblemDTO struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
 type OrderResponseDTO struct {
 	Status  string `json:"status"`
 	Expires string `json:"expires"`
@@ -29,6 +44,8 @@ type OrderResponseDTO struct {
 	NotAfter  string `json:"notAfter,omitempty"`
 
 	Identifiers []OrderIdentifierDTO `json:"identifiers"`
+
+	Error *ProblemDTO `json:"error,omitempty"`
 
 	AuthorizationURLs []string `json:"authorizations"`
 	FinalizeURL       string   `json:"finalize"`

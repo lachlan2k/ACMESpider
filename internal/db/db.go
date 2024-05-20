@@ -54,6 +54,8 @@ type DBOrder struct {
 	Identifiers   []DBOrderIdentifier `json:"identifiers"`
 	CertificateID string              `json:"certificate_id"`
 
+	ErrorID string `json:"error_id"`
+
 	AuthzIDs []string `json:"authz_ids"`
 }
 

@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/lachlan2k/acmespider/internal/db"
@@ -34,6 +36,15 @@ func (h Handlers) dbOrderToDTO(order *db.DBOrder) dtos.OrderResponseDTO {
 		naft = time64ToString(*order.NotAfter)
 	}
 
+	var errProblem *dtos.ProblemDTO = nil
+	if order.ErrorID != "" {
+		errProblem = &dtos.ProblemDTO{
+			Type:       "urn:ietf:params:acme:error:serverInternal",
+			HTTPStatus: http.StatusInternalServerError,
+			Detail:     fmt.Sprintf("Error ID %s", order.ErrorID),
+		}
+	}
+
 	return dtos.OrderResponseDTO{
 		Status:            order.Status,
 		Expires:           time64ToString(order.Expires),
@@ -41,6 +52,7 @@ func (h Handlers) dbOrderToDTO(order *db.DBOrder) dtos.OrderResponseDTO {
 		NotAfter:          naft,
 		Identifiers:       identifiers,
 		AuthorizationURLs: authzURLs,
+		Error:             errProblem,
 		FinalizeURL:       h.LinkCtrl.FinalizeOrderPath(order.ID).Abs(),
 		CertificateURL:    h.LinkCtrl.CertPath(order.CertificateID).Abs(),
 	}
