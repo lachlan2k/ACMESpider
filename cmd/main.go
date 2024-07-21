@@ -26,14 +26,17 @@ const envACMEDirectory = "ACMESPIDER_ACME_CA_DIRECTORY"
 const envACMETOSAccept = "ACMESPIDER_ACME_TOS_ACCEPT"
 const envACMEEmail = "ACMESPIDER_ACME_EMAIL"
 const envACMEKeyType = "ACMESPIDER_KEY_TYPE"
+const envACMEMetaTosURL = "ACMESPIDER_META_TOS_URL"
+const envACMEMetaCAAs = "ACMESPIDER_META_CAAS"
+const envACMEMetaWebsite = "ACMESPIDER_META_WEBSITE"
 
 func strIsTruthy(str string) bool {
-	l := strings.TrimSpace(strings.ToLower(os.Getenv(envACMETOSAccept)))
+	l := strings.TrimSpace(strings.ToLower(str))
 	return l == "yes" || l == "true" || l == "1"
 }
 
 func getKeytype(keystr string) certcrypto.KeyType {
-	l := strings.TrimSpace(strings.ToLower(os.Getenv(envACMETOSAccept)))
+	l := strings.TrimSpace(strings.ToLower(keystr))
 	switch l {
 	case "rsa", "rsa2048":
 		return certcrypto.RSA2048
@@ -138,6 +141,9 @@ func runServe(cCtx *cli.Context) error {
 		Hostname:           hostname,
 		KeyType:            getKeytype(os.Getenv(envACMEKeyType)),
 		PublicDNSResolvers: publicServers,
+		MetaTosURL:         os.Getenv(envACMEMetaTosURL),
+		MetaCAAs:           strings.Split(os.Getenv(envACMEMetaCAAs), ","),
+		MetaWebsite:        os.Getenv(envACMEMetaWebsite),
 	})
 }
 

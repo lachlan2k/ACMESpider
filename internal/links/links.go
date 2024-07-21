@@ -21,6 +21,10 @@ func (l Path) Relative() string {
 
 type LinkController struct {
 	BaseURL string
+
+	MetaTosURL  string
+	MetaCAAs    []string
+	MetaWebsite string
 }
 
 func (l LinkController) Path(relative string) Path {
@@ -123,5 +127,10 @@ func (l LinkController) GenerateDirectory() dtos.DirectoryListResponseDTO {
 		NewAuthz:   l.NewAuthzPath().Abs(),
 		RevokeCert: l.RevokeCertPath().Abs(),
 		KeyChange:  l.AccountKeyChangePath().Abs(),
+		Meta: dtos.DirectoryMetaResponseDTO{
+			TOS:           l.MetaTosURL,
+			Website:       l.MetaWebsite,
+			CAAIdentities: l.MetaCAAs,
+		},
 	}
 }

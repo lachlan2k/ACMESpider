@@ -63,6 +63,10 @@ type Config struct {
 	UseTLS             bool
 	Hostname           string
 	KeyType            certcrypto.KeyType
+
+	MetaTosURL  string
+	MetaCAAs    []string
+	MetaWebsite string
 }
 
 func Listen(conf Config) error {
@@ -145,7 +149,10 @@ func Listen(conf Config) error {
 	}
 
 	l := links.LinkController{
-		BaseURL: fullBaseURL + "acme",
+		BaseURL:     fullBaseURL + "acme",
+		MetaTosURL:  conf.MetaTosURL,
+		MetaCAAs:    conf.MetaCAAs,
+		MetaWebsite: conf.MetaWebsite,
 	}
 
 	acmeCtrl := acme_controller.New(boltDb, legoClient, l)
