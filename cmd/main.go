@@ -141,9 +141,10 @@ func runServe(cCtx *cli.Context) error {
 		Hostname:           hostname,
 		KeyType:            getKeytype(os.Getenv(envACMEKeyType)),
 		PublicDNSResolvers: publicServers,
-		MetaTosURL:         os.Getenv(envACMEMetaTosURL),
-		MetaCAAs:           strings.Split(os.Getenv(envACMEMetaCAAs), ","),
-		MetaWebsite:        os.Getenv(envACMEMetaWebsite),
+
+		MetaTosURL:  os.Getenv(envACMEMetaTosURL),
+		MetaCAAs:    strings.Split(os.Getenv(envACMEMetaCAAs), ","),
+		MetaWebsite: os.Getenv(envACMEMetaWebsite),
 	})
 }
 
