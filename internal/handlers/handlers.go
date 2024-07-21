@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 	"github.com/lachlan2k/acmespider/internal/acme_controller"
@@ -238,7 +239,14 @@ func (h Handlers) InitiateChallenge(c echo.Context) error {
 	if err != nil {
 		return acme_controller.InternalErrorProblem(err)
 	}
-	if string(payloadBody) != "{}" {
+
+	// Despite RFC8555 7.5.1
+	// Some ACME clients send arbitary data rather than {}
+	// So rather than checking that its == "{}" (like the RFC implies)
+	// We check it starts with { and ends with }
+	// ref: https://datatracker.ietf.org/doc/html/rfc8555#section-7.5.1
+	// ref: https://github.com/smallstep/certificates/blob/077f688e2d781fa12fd3d702cfab5b6f989a4391/acme/api/handler.go#L330-L334
+	if !strings.HasPrefix(string(payloadBody), "{") || !strings.HasSuffix(string(payloadBody), "}") {
 		return acme_controller.MalformedProblem(fmt.Sprintf("Expected empty JSON object ({}) for payload, actually receieved %s", string(payloadBody)))
 	}
 
