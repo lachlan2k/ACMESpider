@@ -38,7 +38,17 @@ func makeLoggerMiddleware() echo.MiddlewareFunc {
 				if values.Error != nil {
 					wrapped := &acme_controller.ProblemDetails{}
 					if errors.As(values.Error, &wrapped) {
-						log.WithError(wrapped.Unwrap()).WithFields(fields).WithField("error_id", wrapped.ID()).Error("request error " + wrapped.ID())
+						if wrapped.Unwrap() != nil {
+							// "Real error", i.e. probably a 500
+							log.WithError(wrapped.Unwrap()).WithFields(fields).WithField("error_id", wrapped.ID()).Error("request error " + wrapped.ID())
+						} else {
+							// Generic problem
+							log.WithError(wrapped).
+								WithFields(fields).
+								WithField("problem_type", wrapped.Type).
+								WithField("problem_detail", wrapped.Detail).
+								Warn("request problem")
+						}
 						return nil
 					}
 					log.WithError(values.Error).WithFields(fields).Error("generic request error")
