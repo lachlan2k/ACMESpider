@@ -47,6 +47,7 @@ func makeLoggerMiddleware() echo.MiddlewareFunc {
 								WithFields(fields).
 								WithField("problem_type", wrapped.Type).
 								WithField("problem_detail", wrapped.Detail).
+								WithField("problem_status", wrapped.HTTPStatus).
 								Warn("request problem")
 						}
 						return nil
