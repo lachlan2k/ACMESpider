@@ -28,6 +28,8 @@ ACMESpider solves these problems:
 
 ## Deployment
 
+An example Docker command is given below. Please carefully review environment variables and customise to your needs.
+
 ```
 docker run \
     -d \
