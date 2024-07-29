@@ -6,6 +6,26 @@ Your internal services complete an internal HTTP-01 ACME challenge with ACMESpid
 
 ![image](https://github.com/user-attachments/assets/833963b4-73aa-433c-8ac8-4b61d7917077)
 
+## Why?
+
+Traditionally, the two most common methods to leverage a public ACME server (such as Let's Encrypt) for internal services are to:
+- Use DNS-01 challenges, or;
+- Expose the service to the public internet for HTTP-01 challenges (at least the `.well-known/acme-challenge` path)
+
+However both of these methods are incovienient and sacrifice security:
+- Using DNS-01 requires storing an API key for your DNS provider on every server that uses ACME
+- DNS-01 challenges typically allow the server to provision a certificate for any subdomain
+- Publicly exposing services increases attack surface and makes network segmentation more challenging
+- Not every DNS provider is support
+
+ACMESpider solves these problems:
+- DNS API credentials are only stored on ACMESpider, and don't have to be littered around all your servers
+- Logging of internally issued certificate is centralised on ACMESpider
+- You don't have to expose anything to the public internet
+- Internal services don't have to communicate to the internet - only to ACMESpider
+- ACMESpider supports a very wide range of DNS providers
+
+
 ## Deployment
 
 ```
