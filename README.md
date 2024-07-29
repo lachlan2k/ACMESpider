@@ -2,7 +2,7 @@
 
 ACMESpider acts as a broker within your network to issue trusted ACME certificates for internal servers.
 
-Your internal services complete an internal HTTP-01 ACME challenge with ACMESpider, and ACMESpider uses a DNS-01 to provision a certificate from an authority such as Let's Encrypt.
+Your internal services complete an internal HTTP-01 ACME challenge with ACMESpider, and ACMESpider uses a DNS-01 challenge to provision a certificate from an authority such as Let's Encrypt.
 
 ![image](https://github.com/user-attachments/assets/833963b4-73aa-433c-8ac8-4b61d7917077)
 
@@ -22,7 +22,7 @@ docker run \
     ghcr.io/lachlan2k/acmespider:main
 ```
 
-### Pre-requisites
+### Prerequisites
 
 - **Public Domain:** ACMESpider is designed to provision certificates from a public authority like Let's Encrypt using a public domain name that you own. For instance, `wiki.internal.example.com`, `photos.internal.example.com`, etc.
 - **Supported DNS Provider:** ACMESpider leverages [Lego](https://go-acme.github.io/lego/dns/) to provision certificates. To complete your public DNS challenge, your domain will need to be connected to any DNS provider supported by Lego, such as Cloudflare, Route53, Azure DNS, and many others. You will need an API token or similar for your provider.
@@ -31,7 +31,7 @@ docker run \
 
 ### Environment Variables
 
-You must configure one Lego DNS provider with environment variables. See [here](https://go-acme.github.io/lego/dns/). For example `CLOUDFLARE_DNS_API_TOKEN` and `CLOUDFLARE_ZONE_API_TOKEN` for Cloudflare.
+You must configure one Lego DNS provider with environment variables. See [here](https://go-acme.github.io/lego/dns/). For example, `CLOUDFLARE_DNS_API_TOKEN` and `CLOUDFLARE_ZONE_API_TOKEN` for Cloudflare.
 
 Variable | Description | Default
 | - | - | -
@@ -39,7 +39,7 @@ Variable | Description | Default
 `ACMESPIDER_ACME_TOS_ACCEPT` | Please set this to `true` to confirm you accept the TOS of the ACME provider (i.e. Let's Encrypt) | **Required** (no default)
 `ACMESPIDER_ACME_EMAIL` | Your email address to register with the ACME provider (i.e. Let's Encrypt) | **Required** (no default)
 `ACMESPIDER_ACME_CA_DIRECTORY` | URL of the ACME provider | `https://acme-v02.api.letsencrypt.org/directory`
-`ACMESPIDER_PUBLIC_RESOLVERS` | Public DNS servers to use when internally checking the DNS-01 challenge (comma separated) | `1.1.1.1,8.8.8.8`
+`ACMESPIDER_PUBLIC_RESOLVERS` | Public DNS servers to use when internally checking the DNS-01 challenge (comma-separated) | `1.1.1.1,8.8.8.8`
 
 ## Client Configuration
 
