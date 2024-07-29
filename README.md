@@ -19,7 +19,7 @@ docker run \
     -e ACMESPIDER_ACME_TOS_ACCEPT=true \
     -e CLOUDFLARE_DNS_API_TOKEN=<YOUR CLOUDFLARE API TOKEN> \
     -e CLOUDFLARE_ZONE_API_TOKEN=<YOUR CLOUDFLARE API TOKEN> \
-    ghcr.io/lachlan2k/acmespider:main
+    ghcr.io/lachlan2k/acmespider:latest
 ```
 
 ### Prerequisites
