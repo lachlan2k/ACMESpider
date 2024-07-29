@@ -24,7 +24,7 @@ docker run \
 
 ### Prerequisites
 
-- **Public Domain:** ACMESpider is designed to provision certificates from a public authority like Let's Encrypt using a public domain name that you own. For instance, `wiki.internal.example.com`, `photos.internal.example.com`, etc.
+- **Public Domain:** ACMESpider is designed to provision certificates from a public authority like Let's Encrypt using a public domain name that you own (such as `example.com`), with internal services on subdomains, for instance, `wiki.internal.example.com`, `photos.internal.example.com`, etc.
 - **Supported DNS Provider:** ACMESpider leverages [Lego](https://go-acme.github.io/lego/dns/) to provision certificates. To complete your public DNS challenge, your domain will need to be connected to any DNS provider supported by Lego, such as Cloudflare, Route53, Azure DNS, and many others. You will need an API token or similar for your provider.
 - **Appropriate DNS Records:** ACMESpider needs to reach your internal services by their hostname to complete HTTP-01 challenges. Whether you use [split-horizon DNS](https://en.wikipedia.org/wiki/Split-horizon_DNS) or configure your records with public DNS, one way or another, your ACMESpider server will need to resolve your service's hostname to their private IP address.
     - ACMESpider itself also uses the same provider to issue certificates for itself. You will require a DNS record such as `acmespider.internal.example.com` that points to your ACMESpider server.
