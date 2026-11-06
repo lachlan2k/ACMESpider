@@ -40,10 +40,6 @@ func checkJWKAlgorithmValidForAccount(alg string, key *jose.JSONWebKey) error {
 }
 
 func extractJWS(requestBody []byte) (*jose.JSONWebSignature, *jose.Signature, error) {
-	if len(requestBody) == 0 || requestBody[0] != '{' {
-		return nil, nil, acme_controller.MalformedProblem("Invalid JWS JSON")
-	}
-
 	// we extract into here to ensure there are no dis-allowed fields
 	// before we parse with jose
 	var disallowedFields struct {
