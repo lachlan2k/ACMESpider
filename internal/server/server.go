@@ -75,8 +75,6 @@ func Listen(conf Config) error {
 	app.Use(makeLoggerMiddleware())
 	app.Use(middleware.Recover())
 
-	acmeAPI := app.Group("/acme")
-
 	boltDb, err := db.NewBoltDb(path.Join(conf.StoragePath, "acmespider.db"))
 	if err != nil {
 		return err
@@ -163,28 +161,7 @@ func Listen(conf Config) error {
 		LinkCtrl:  l,
 	}
 
-	app.HTTPErrorHandler = h.ErrorHandler(app)
-
-	acmeAPI.Use(h.AddIndexLinkMw)
-
-	acmeAPI.GET(l.NewNoncePath().Relative(), h.GetNonce, h.AddNonceMw)
-	acmeAPI.HEAD(l.NewNoncePath().Relative(), h.GetNonce, h.AddNonceMw)
-	acmeAPI.GET(l.DirectoryPath().Relative(), h.GetDirectory)
-	acmeAPI.HEAD(l.DirectoryPath().Relative(), h.GetDirectory)
-
-	acmeAPI.POST(l.NewAccountPath().Relative(), h.NewAccount, h.AddNonceMw, h.ValidateJWSWithJWKAndExtractPayload)
-	acmeAPI.POST(l.AccountPath(":"+l.AccountIDParam()).Relative(), h.GetOrUpdateAccount, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
-	acmeAPI.POST(l.AccountKeyChangePath().Relative(), h.NotImplemented, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
-
-	acmeAPI.POST(l.NewOrderPath().Relative(), h.NewOrder, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
-	acmeAPI.POST(l.OrderPath(":"+l.OrderIDParam()).Relative(), h.GetOrder, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
-	acmeAPI.POST(l.AccountOrdersPath(":"+l.AccountIDParam()).Relative(), h.GetOrdersByAccountID, h.ValidateJWSWithKIDAndExtractPayload, h.AddNonceMw, h.POSTAsGETMw)
-	acmeAPI.POST(l.FinalizeOrderPath(":"+l.OrderIDParam()).Relative(), h.FinalizeOrder, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
-
-	acmeAPI.POST(l.AuthzPath(":"+l.AuthzIDParam()).Relative(), h.GetAuthorization, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload, h.POSTAsGETMw)
-	acmeAPI.POST(l.ChallengePath(":"+l.ChallengeIDParam()).Relative(), h.InitiateChallenge, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
-	acmeAPI.POST(l.CertPath(":"+l.CertIDParam()).Relative(), h.GetCertificate, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload, h.POSTAsGETMw)
-	acmeAPI.POST(l.RevokeCertPath().Relative(), h.RevokeCert, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
+	registerRoutes(app, h, l)
 
 	if !conf.UseTLS {
 		log.Info("Listening on plain HTTP...")
@@ -222,6 +199,35 @@ func Listen(conf Config) error {
 		TLSConfig: tlsConf,
 	}
 	return s.ListenAndServeTLS("", "")
+}
+
+// registerRoutes wires up the ACME API. AddNonceMw has to come before the JWS validation on every
+// POST route so that error responses carry a fresh Replay-Nonce too (RFC 8555 6.5).
+func registerRoutes(app *echo.Echo, h handlers.Handlers, l links.LinkController) {
+	app.HTTPErrorHandler = h.ErrorHandler(app)
+
+	acmeAPI := app.Group("/acme")
+
+	acmeAPI.Use(h.AddIndexLinkMw)
+
+	acmeAPI.GET(l.NewNoncePath().Relative(), h.GetNonce, h.AddNonceMw)
+	acmeAPI.HEAD(l.NewNoncePath().Relative(), h.GetNonce, h.AddNonceMw)
+	acmeAPI.GET(l.DirectoryPath().Relative(), h.GetDirectory)
+	acmeAPI.HEAD(l.DirectoryPath().Relative(), h.GetDirectory)
+
+	acmeAPI.POST(l.NewAccountPath().Relative(), h.NewAccount, h.AddNonceMw, h.ValidateJWSWithJWKAndExtractPayload)
+	acmeAPI.POST(l.AccountPath(":"+l.AccountIDParam()).Relative(), h.GetOrUpdateAccount, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
+	acmeAPI.POST(l.AccountKeyChangePath().Relative(), h.NotImplemented, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
+
+	acmeAPI.POST(l.NewOrderPath().Relative(), h.NewOrder, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
+	acmeAPI.POST(l.OrderPath(":"+l.OrderIDParam()).Relative(), h.GetOrder, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
+	acmeAPI.POST(l.AccountOrdersPath(":"+l.AccountIDParam()).Relative(), h.GetOrdersByAccountID, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload, h.POSTAsGETMw)
+	acmeAPI.POST(l.FinalizeOrderPath(":"+l.OrderIDParam()).Relative(), h.FinalizeOrder, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
+
+	acmeAPI.POST(l.AuthzPath(":"+l.AuthzIDParam()).Relative(), h.GetAuthorization, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload, h.POSTAsGETMw)
+	acmeAPI.POST(l.ChallengePath(":"+l.ChallengeIDParam()).Relative(), h.InitiateChallenge, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
+	acmeAPI.POST(l.CertPath(":"+l.CertIDParam()).Relative(), h.GetCertificate, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload, h.POSTAsGETMw)
+	acmeAPI.POST(l.RevokeCertPath().Relative(), h.RevokeCert, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
 }
 
 type solverWrapper struct {
