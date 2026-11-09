@@ -22,6 +22,11 @@ func (ac ACMEController) makeChallengeID(authzID string, index int) string {
 func (ac ACMEController) NewOrder(payload dtos.OrderCreateRequestDTO, accountID []byte) (*db.DBOrder, error) {
 	// TODO: can we decide what orders the account is/isn't allowed to create?
 
+	// RFC 8555 7.4: an order needs at least one identifier
+	if len(payload.Identifiers) == 0 {
+		return nil, MalformedProblem("order must contain at least one identifier")
+	}
+
 	newId, err := GenerateID()
 	if err != nil {
 		return nil, InternalErrorProblem(err)
