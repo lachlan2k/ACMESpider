@@ -91,9 +91,7 @@ func TestNewOrderRejectsInvalidInput(t *testing.T) {
 	}{
 		{"empty value", dtos.OrderCreateRequestDTO{Identifiers: []dtos.OrderIdentifierDTO{{Type: "dns", Value: ""}}}},
 		{"empty value among valid", dtos.OrderCreateRequestDTO{Identifiers: []dtos.OrderIdentifierDTO{good, {Type: "dns"}}}},
-		{"ip identifier type", dtos.OrderCreateRequestDTO{Identifiers: []dtos.OrderIdentifierDTO{{Type: "ip", Value: "127.0.0.1"}}}},
 		{"empty type", dtos.OrderCreateRequestDTO{Identifiers: []dtos.OrderIdentifierDTO{{Value: "a.example.com"}}}},
-		{"upper case type", dtos.OrderCreateRequestDTO{Identifiers: []dtos.OrderIdentifierDTO{{Type: "DNS", Value: "a.example.com"}}}},
 		{"bad notBefore", dtos.OrderCreateRequestDTO{Identifiers: []dtos.OrderIdentifierDTO{good}, NotBefore: "tomorrow"}},
 		{"bad notAfter", dtos.OrderCreateRequestDTO{Identifiers: []dtos.OrderIdentifierDTO{good}, NotAfter: "2030-01-01"}},
 	}
@@ -108,7 +106,35 @@ func TestNewOrderRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-// RFC 8555 7.4: an order needs at least one identifier. With zero identifiers there are no
+// RFC 8555 6.7: an identifier of a type we don't handle is unsupportedIdentifier, not just malformed
+func TestNewOrderUnsupportedIdentifierType(t *testing.T) {
+	ac := newTestCtrl(t)
+	acc := ac.newTestAccount(t)
+
+	for _, idType := range []string{"ip", "email", "DNS", "dns "} {
+		_, err := ac.NewOrder(dtos.OrderCreateRequestDTO{Identifiers: []dtos.OrderIdentifierDTO{{Type: idType, Value: "a.example.com"}}}, acc)
+		expectProblem(t, err, unsupportedIdentifierErr, http.StatusBadRequest)
+	}
+}
+
+// RFC 8555 7.5.1: an authz that becomes valid must have an expiry
+func TestNewOrderAuthzsHaveExpiry(t *testing.T) {
+	ac := newTestCtrl(t)
+	order := ac.newTestOrder(t, ac.newTestAccount(t), "a.example.com", "b.example.com")
+
+	for _, id := range order.AuthzIDs {
+		authz, err := ac.db.GetAuthz([]byte(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if authz.ExpireValidityTime == nil || *authz.ExpireValidityTime != order.Expires {
+			t.Errorf("authz expiry = %v, want the order's expiry %d", authz.ExpireValidityTime, order.Expires)
+		}
+	}
+}
+
+// RFC 8555 7.4 marks "identifiers" required but doesn't forbid an empty list; we reject it as policy.
+// With zero identifiers there are no
 // authorizations to validate, so the order would immediately count as ready.
 func TestNewOrderRejectsNoIdentifiers(t *testing.T) {
 	ac := newTestCtrl(t)
@@ -193,7 +219,7 @@ func TestRecomputeOrderStatus(t *testing.T) {
 		}
 	})
 
-	t.Run("expired with pending authz becomes expired", func(t *testing.T) {
+	t.Run("expired with pending authz becomes invalid", func(t *testing.T) {
 		ac := newTestCtrl(t)
 		order := ac.newTestOrder(t, ac.newTestAccount(t), "a.example.com")
 		setExpires(t, ac, order.ID, time.Now().Add(-time.Minute))
@@ -201,12 +227,13 @@ func TestRecomputeOrderStatus(t *testing.T) {
 		if err := ac.recomputeOrderStatus([]byte(order.ID)); err != nil {
 			t.Fatal(err)
 		}
-		if s := status(t, ac, order.ID); s != dtos.OrderStatusExpired {
-			t.Errorf("status = %s, want expired", s)
+		// RFC 8555 7.1.6: an order that expires moves to invalid ("expired" isn't an order status)
+		if s := status(t, ac, order.ID); s != dtos.OrderStatusInvalid {
+			t.Errorf("status = %s, want invalid", s)
 		}
 	})
 
-	t.Run("expired with all authz valid stays expired", func(t *testing.T) {
+	t.Run("expired with all authz valid becomes invalid, not ready", func(t *testing.T) {
 		ac := newTestCtrl(t)
 		order := ac.newTestOrder(t, ac.newTestAccount(t), "a.example.com")
 		ac.markAuthzValid(t, order.AuthzIDs[0])
@@ -215,12 +242,13 @@ func TestRecomputeOrderStatus(t *testing.T) {
 		if err := ac.recomputeOrderStatus([]byte(order.ID)); err != nil {
 			t.Fatal(err)
 		}
-		if s := status(t, ac, order.ID); s != dtos.OrderStatusExpired {
-			t.Errorf("status = %s, want expired", s)
+		// RFC 8555 7.1.6: an order that expires moves to invalid ("expired" isn't an order status)
+		if s := status(t, ac, order.ID); s != dtos.OrderStatusInvalid {
+			t.Errorf("status = %s, want invalid", s)
 		}
 	})
 
-	for _, s := range []string{dtos.OrderStatusProcessing, dtos.OrderStatusValid, dtos.OrderStatusInvalid, dtos.OrderStatusReady, dtos.OrderStatusExpired} {
+	for _, s := range []string{dtos.OrderStatusProcessing, dtos.OrderStatusValid, dtos.OrderStatusInvalid, dtos.OrderStatusReady} {
 		t.Run("non-pending status untouched: "+s, func(t *testing.T) {
 			ac := newTestCtrl(t)
 			order := ac.newTestOrder(t, ac.newTestAccount(t), "a.example.com")
@@ -236,10 +264,27 @@ func TestRecomputeOrderStatus(t *testing.T) {
 		})
 	}
 
-	t.Run("invalid authz does not make order ready", func(t *testing.T) {
+	// RFC 8555 7.1.6: an authz in a final state other than valid makes the order invalid
+	for _, authzStatus := range []string{dtos.AuthzStatusInvalid, dtos.AuthzStatusExpired, dtos.AuthzStatusRevoked, dtos.AuthzStatusDeactivated} {
+		t.Run("authz "+authzStatus+" makes the order invalid", func(t *testing.T) {
+			ac := newTestCtrl(t)
+			order := ac.newTestOrder(t, ac.newTestAccount(t), "a.example.com", "b.example.com")
+			ac.markAuthzValid(t, order.AuthzIDs[0])
+			ac.db.UpdateAuthz([]byte(order.AuthzIDs[1]), func(a *db.DBAuthz) error { a.Status = authzStatus; return nil })
+
+			if err := ac.recomputeOrderStatus([]byte(order.ID)); err != nil {
+				t.Fatal(err)
+			}
+			if s := status(t, ac, order.ID); s != dtos.OrderStatusInvalid {
+				t.Errorf("status = %s, want invalid", s)
+			}
+		})
+	}
+
+	t.Run("pending authz alongside valid ones keeps the order pending", func(t *testing.T) {
 		ac := newTestCtrl(t)
-		order := ac.newTestOrder(t, ac.newTestAccount(t), "a.example.com")
-		ac.db.UpdateAuthz([]byte(order.AuthzIDs[0]), func(a *db.DBAuthz) error { a.Status = dtos.AuthzStatusInvalid; return nil })
+		order := ac.newTestOrder(t, ac.newTestAccount(t), "a.example.com", "b.example.com")
+		ac.markAuthzValid(t, order.AuthzIDs[0])
 
 		ac.recomputeOrderStatus([]byte(order.ID))
 		if s := status(t, ac, order.ID); s != dtos.OrderStatusPending {
@@ -534,7 +579,7 @@ func TestFinalizeOrderRequiresReady(t *testing.T) {
 	})
 
 	// All authzs are valid in every case below, so only the order's status can stop the finalize
-	for _, status := range []string{dtos.OrderStatusProcessing, dtos.OrderStatusValid, dtos.OrderStatusInvalid, dtos.OrderStatusExpired} {
+	for _, status := range []string{dtos.OrderStatusProcessing, dtos.OrderStatusValid, dtos.OrderStatusInvalid} {
 		t.Run("status "+status, func(t *testing.T) {
 			ac := newTestCtrl(t)
 			acc := ac.newTestAccount(t)
@@ -559,8 +604,8 @@ func TestFinalizeOrderRequiresReady(t *testing.T) {
 		_, err := ac.FinalizeOrder([]byte(order.ID), dtos.OrderFinalizeRequestDTO{CSRB64: validCSR}, acc)
 		expectProblem(t, err, orderNotReadyErr, http.StatusForbidden)
 
-		if got, _ := ac.db.GetOrder([]byte(order.ID)); got.Status != dtos.OrderStatusExpired {
-			t.Errorf("status = %s, want expired", got.Status)
+		if got, _ := ac.db.GetOrder([]byte(order.ID)); got.Status != dtos.OrderStatusInvalid {
+			t.Errorf("status = %s, want invalid", got.Status)
 		}
 	})
 
@@ -636,7 +681,7 @@ func TestReadyOrderExpires(t *testing.T) {
 	if err := ac.recomputeOrderStatus([]byte(order.ID)); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := ac.db.GetOrder([]byte(order.ID)); got.Status != dtos.OrderStatusExpired {
-		t.Fatalf("status = %s, want expired", got.Status)
+	if got, _ := ac.db.GetOrder([]byte(order.ID)); got.Status != dtos.OrderStatusInvalid {
+		t.Fatalf("status = %s, want invalid", got.Status)
 	}
 }

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -22,7 +23,7 @@ type Handlers struct {
 
 func (h Handlers) addLink(c echo.Context, url string, rel string) {
 	headers := c.Response().Header()
-	headers.Set("Link", fmt.Sprintf("<%s>;rel=%q", url, rel))
+	headers.Add("Link", fmt.Sprintf("<%s>;rel=%q", url, rel))
 }
 
 func (h Handlers) GetNonce(c echo.Context) error {
@@ -47,6 +48,11 @@ func (h Handlers) NewAccount(c echo.Context) error {
 	payload, err := getPayloadBoundBody[dtos.AccountRequestDTO](c)
 	if err != nil {
 		return err
+	}
+
+	// RFC 8555 7.3: if we publish terms of service, accounts must agree to them
+	if h.LinkCtrl.MetaTosURL != "" && !payload.TermsOfServiceAgreed {
+		return acme_controller.MalformedProblem("termsOfServiceAgreed must be true: terms of service are published at " + h.LinkCtrl.MetaTosURL)
 	}
 
 	jwsHeaders, err := getProtectedHeader(c)
@@ -110,13 +116,38 @@ func (h Handlers) GetOrUpdateAccount(c echo.Context) error {
 
 func (h Handlers) ErrorHandler(app *echo.Echo) echo.HTTPErrorHandler {
 	return func(err error, c echo.Context) {
-		probErr, ok := err.(*acme_controller.ProblemDetails)
-		if !ok {
-			app.DefaultHTTPErrorHandler(err, c)
+		if c.Response().Committed {
 			return
 		}
 
-		c.JSON(probErr.HTTPStatus, probErr)
+		var problem *acme_controller.ProblemDetails
+		var httpErr *echo.HTTPError
+
+		switch {
+		case errors.As(err, &problem):
+			// Doesn't need any modificaiton
+		case errors.As(err, &httpErr) && httpErr.Code == http.StatusNotFound:
+			// Convert a general Echo 404 to an ACME error
+			problem = acme_controller.NotFoundProblem("Not found")
+		case errors.As(err, &httpErr) && httpErr.Code == http.StatusMethodNotAllowed:
+			// ...same but 405
+			problem = acme_controller.MethodNotAllowed()
+		case httpErr != nil:
+			app.DefaultHTTPErrorHandler(err, c)
+			return
+		default:
+			// Anything unexpected: tell the client nothing but an ID, and log the cause against it
+			problem = acme_controller.InternalErrorProblem(err)
+			logrus.WithError(err).WithField("error_id", problem.ID()).Error("unhandled error " + problem.ID())
+		}
+
+		body, marshalErr := json.Marshal(problem)
+		if marshalErr != nil {
+			app.DefaultHTTPErrorHandler(marshalErr, c)
+			return
+		}
+		// RFC 8555 6.7 / RFC 7807
+		c.Blob(problem.HTTPStatus, "application/problem+json", body)
 	}
 }
 
@@ -265,6 +296,12 @@ func (h Handlers) InitiateChallenge(c echo.Context) error {
 	latestChall, err := h.AcmeCtrl.InitiateChallenge([]byte(challID), accountID)
 	if err != nil {
 		return err
+	}
+
+	// RFC 8555 7.1: the "up" link relation on a challenge points at the authorization it belongs to.
+	// certbot refuses to continue without it.
+	if authzID, err := h.AcmeCtrl.AuthzIDFromChallengeID([]byte(challID)); err == nil {
+		h.addLink(c, h.LinkCtrl.AuthzPath(string(authzID)).Abs(), "up")
 	}
 
 	return c.JSON(http.StatusOK, h.dbChallengeToDTO(latestChall))

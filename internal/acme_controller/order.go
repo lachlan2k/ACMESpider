@@ -25,7 +25,8 @@ func (ac ACMEController) makeChallengeID(authzID string, index int) string {
 func (ac ACMEController) NewOrder(payload dtos.OrderCreateRequestDTO, accountID []byte) (*db.DBOrder, error) {
 	// TODO: can we decide what orders the account is/isn't allowed to create?
 
-	// RFC 8555 7.4: an order needs at least one identifier
+	// RFC 8555 7.4 lists "identifiers" as required but doesn't say an empty list is invalid. We reject it as
+	// policy: there'd be nothing to authorize, so the order would be treated as ready straight away.
 	if len(payload.Identifiers) == 0 {
 		return nil, MalformedProblem("order must contain at least one identifier")
 	}
@@ -43,8 +44,11 @@ func (ac ACMEController) NewOrder(payload dtos.OrderCreateRequestDTO, accountID 
 
 		// TODO: here, decide if a client is/isn't allowed to create a specific Value
 
+		if identifier.Type == "" {
+			return nil, MalformedProblem(fmt.Sprintf("identifier index %d has no type", i))
+		}
 		if identifier.Type != "dns" {
-			return nil, MalformedProblem(fmt.Sprintf("identifier index %d had a type of %q, but the only supported type is \"dns\"", i, identifier.Type))
+			return nil, UnsupportedIdentifierProblem(fmt.Sprintf("identifier index %d had a type of %q, but the only supported type is \"dns\"", i, identifier.Type))
 		}
 
 		dbIdentifiers[i] = db.DBOrderIdentifier{
@@ -75,6 +79,7 @@ func (ac ACMEController) NewOrder(payload dtos.OrderCreateRequestDTO, accountID 
 	}
 
 	expires := time.Now().Add(orderExpiryTime)
+	expiresUnix := expires.Unix()
 
 	authzs := make([]db.DBAuthz, len(dbIdentifiers))
 	authzIDs := make([]string, len(dbIdentifiers))
@@ -93,11 +98,12 @@ func (ac ACMEController) NewOrder(payload dtos.OrderCreateRequestDTO, accountID 
 		}
 
 		authzs[i] = db.DBAuthz{
-			ID:         newAuthzID,
-			OrderID:    newId,
-			AccountID:  string(accountID),
-			Status:     dtos.AuthzStatusPending,
-			Identifier: id,
+			ID:                 newAuthzID,
+			OrderID:            newId,
+			AccountID:          string(accountID),
+			Status:             dtos.AuthzStatusPending,
+			ExpireValidityTime: &expiresUnix,
+			Identifier:         id,
 			Challenges: []db.DBAuthzChallenge{
 				{
 					ID:     ac.makeChallengeID(newAuthzID, 0),
@@ -260,8 +266,8 @@ func parseCSR(csrB64 string) (*x509.CertificateRequest, error) {
 func validateCSRForOrder(csr *x509.CertificateRequest, order *db.DBOrder) error {
 	// RFC 8555 7.4
 	// > A request to finalize an order will result in an error if the CA is
-    // > unwilling to issue a certificate corresponding to the submitted CSR.
-    // > For example:
+	// > unwilling to issue a certificate corresponding to the submitted CSR.
+	// > For example:
 	// > - If the CSR and order identifiers differ
 	// > - If the account is not authorized for the identifiers indicated in the CSR
 

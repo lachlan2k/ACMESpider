@@ -124,7 +124,7 @@ func (l LinkController) GenerateDirectory() dtos.DirectoryListResponseDTO {
 		NewNonce:   l.NewNoncePath().Abs(),
 		NewAccount: l.NewAccountPath().Abs(),
 		NewOrder:   l.NewOrderPath().Abs(),
-		NewAuthz:   l.NewAuthzPath().Abs(),
+		// newAuthz is left out: pre-authorization isn't supported, and RFC 8555 7.1.1 says to omit it then
 		RevokeCert: l.RevokeCertPath().Abs(),
 		KeyChange:  l.AccountKeyChangePath().Abs(),
 		Meta: dtos.DirectoryMetaResponseDTO{

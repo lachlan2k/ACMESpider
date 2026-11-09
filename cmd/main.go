@@ -122,6 +122,12 @@ func runServe(cCtx *cli.Context) error {
 		storagepath = "./"
 	}
 
+	// strings.Split("", ",") is [""], which would be advertised as an empty CAA identity
+	var metaCAAs []string
+	if caaStr := os.Getenv(envACMEMetaCAAs); caaStr != "" {
+		metaCAAs = strings.Split(caaStr, ",")
+	}
+
 	dnsServerStr := os.Getenv(envACMEPublicResolvers)
 	publicServers := []string{"1.1.1.1", "8.8.8.8"}
 	if dnsServerStr != "" {
@@ -143,7 +149,7 @@ func runServe(cCtx *cli.Context) error {
 		PublicDNSResolvers: publicServers,
 
 		MetaTosURL:  os.Getenv(envACMEMetaTosURL),
-		MetaCAAs:    strings.Split(os.Getenv(envACMEMetaCAAs), ","),
+		MetaCAAs:    metaCAAs,
 		MetaWebsite: os.Getenv(envACMEMetaWebsite),
 	})
 }

@@ -6,7 +6,6 @@ const (
 	OrderStatusValid      = "valid"
 	OrderStatusInvalid    = "invalid"
 	OrderStatusReady      = "ready"
-	OrderStatusExpired    = "expired"
 )
 
 type OrderCreateRequestDTO struct {

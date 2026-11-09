@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -81,16 +82,27 @@ func TestExtractJWS(t *testing.T) {
 // joseMalformedType is the ACME problem type extractJWS should use for every rejection.
 const joseMalformedType = "urn:ietf:params:acme:error:malformed"
 
-func requireMalformed(t *testing.T, err error) {
+const (
+	joseBadSigAlgType    = "urn:ietf:params:acme:error:badSignatureAlgorithm"
+	joseBadPublicKeyType = "urn:ietf:params:acme:error:badPublicKey"
+)
+
+func requireProblem(t *testing.T, err error, wantType string) *acme_controller.ProblemDetails {
 	t.Helper()
 
 	var pd *acme_controller.ProblemDetails
 	if !errors.As(err, &pd) {
-		t.Fatalf("expected a malformed ProblemDetails, got %T: %v", err, err)
+		t.Fatalf("expected a ProblemDetails, got %T: %v", err, err)
 	}
-	if pd.Type != joseMalformedType || pd.HTTPStatus != http.StatusBadRequest {
-		t.Fatalf("got (%s, %d: %q), want (%s, %d)", pd.Type, pd.HTTPStatus, pd.Detail, joseMalformedType, http.StatusBadRequest)
+	if pd.Type != wantType || pd.HTTPStatus != http.StatusBadRequest {
+		t.Fatalf("got (%s, %d: %q), want (%s, %d)", pd.Type, pd.HTTPStatus, pd.Detail, wantType, http.StatusBadRequest)
 	}
+	return pd
+}
+
+func requireMalformed(t *testing.T, err error) {
+	t.Helper()
+	requireProblem(t, err, joseMalformedType)
 }
 
 func b64url(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
@@ -170,42 +182,75 @@ func TestExtractJWSAlgorithms(t *testing.T) {
 		alg      jose.SignatureAlgorithm
 		key      any
 		embedJWK bool
-		wantErr  bool
+		wantType string // empty means accepted
 	}{
-		{"ES256", jose.ES256, ec256, true, false},
-		{"ES384", jose.ES384, ec384, true, false},
-		{"ES512", jose.ES512, ec521, true, false},
-		{"EdDSA", jose.EdDSA, ed, true, false},
-		{"RS256 2048", jose.RS256, rsa2048, true, false},
-		{"RS384 2048", jose.RS384, rsa2048, true, false},
-		{"RS512 2048", jose.RS512, rsa2048, true, false},
-		{"RS256 3072", jose.RS256, rsa3072, true, false},
+		{"ES256", jose.ES256, ec256, true, ""},
+		{"ES384", jose.ES384, ec384, true, ""},
+		{"ES512", jose.ES512, ec521, true, ""},
+		{"EdDSA", jose.EdDSA, ed, true, ""},
+		{"RS256 2048", jose.RS256, rsa2048, true, ""},
+		{"RS384 2048", jose.RS384, rsa2048, true, ""},
+		{"RS512 2048", jose.RS512, rsa2048, true, ""},
+		{"RS256 3072", jose.RS256, rsa3072, true, ""},
 
-		{"RS256 1024 embedded", jose.RS256, rsa1024, true, true},
-		{"RS256 1536 embedded", jose.RS256, rsa1536, true, true},
-		{"RS512 1024 embedded", jose.RS512, rsa1024, true, true},
+		{"RS256 1024 embedded", jose.RS256, rsa1024, true, joseBadPublicKeyType},
+		{"RS256 1536 embedded", jose.RS256, rsa1536, true, joseBadPublicKeyType},
+		{"RS512 1024 embedded", jose.RS512, rsa1024, true, joseBadPublicKeyType},
 		// With a KID there's no embedded key to size-check here; the key was checked when the account was created
-		{"RS256 1024 by kid", jose.RS256, rsa1024, false, false},
+		{"RS256 1024 by kid", jose.RS256, rsa1024, false, ""},
 
-		{"HS256", jose.HS256, hmacKey, false, true},
-		{"HS384", jose.HS384, hmacKey, false, true},
-		{"HS512", jose.HS512, hmacKey, false, true},
-		{"PS256", jose.PS256, rsa2048, true, true},
-		{"PS384", jose.PS384, rsa2048, true, true},
-		{"PS512", jose.PS512, rsa2048, true, true},
+		{"HS256", jose.HS256, hmacKey, false, joseBadSigAlgType},
+		{"HS384", jose.HS384, hmacKey, false, joseBadSigAlgType},
+		{"HS512", jose.HS512, hmacKey, false, joseBadSigAlgType},
+		{"PS256", jose.PS256, rsa2048, true, joseBadSigAlgType},
+		{"PS384", jose.PS384, rsa2048, true, joseBadSigAlgType},
+		{"PS512", jose.PS512, rsa2048, true, joseBadSigAlgType},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, _, err := extractJWS([]byte(signWithAlg(t, tt.alg, tt.key, tt.embedJWK)))
-			if !tt.wantErr {
+			if tt.wantType == "" {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
 				return
 			}
-			requireMalformed(t, err)
+			requireProblem(t, err, tt.wantType)
 		})
+	}
+}
+
+// RFC 8555 6.2: the problem must list the algorithms the server does support
+func TestBadSignatureAlgorithmListsSupportedAlgorithms(t *testing.T) {
+	_, _, err := extractJWS([]byte(jwsWithHeader(`{"alg":"HS256"}`)))
+	pd := requireProblem(t, err, joseBadSigAlgType)
+
+	for _, want := range []string{"ES256", "EdDSA"} {
+		found := false
+		for _, got := range pd.Algorithms {
+			found = found || got == want
+		}
+		if !found {
+			t.Errorf("algorithms %v should include %s", pd.Algorithms, want)
+		}
+	}
+	for _, got := range pd.Algorithms {
+		if strings.HasPrefix(got, "HS") || got == "none" {
+			t.Errorf("algorithms must not advertise %s", got)
+		}
+	}
+
+	body, _ := json.Marshal(pd)
+	if !strings.Contains(string(body), `"algorithms":["ES256"`) {
+		t.Errorf("algorithms missing from the serialised problem: %s", body)
+	}
+
+	// Other problems must not grow an empty algorithms field
+	_, _, err = extractJWS([]byte("{"))
+	body, _ = json.Marshal(requireProblem(t, err, joseMalformedType))
+	if strings.Contains(string(body), "algorithms") {
+		t.Errorf("unexpected algorithms field: %s", body)
 	}
 }
 
@@ -239,9 +284,18 @@ func TestExtractJWSRejectsBadProtectedHeaders(t *testing.T) {
 		{"kid is an object", `{"alg":"ES256","kid":{}}`},
 		{"nonce is a number", `{"alg":"ES256","nonce":5}`},
 	}
+	// A usable but unsupported algorithm is badSignatureAlgorithm; a missing or unparseable one is just malformed
+	unsupportedAlg := map[string]bool{
+		"alg none": true, "alg None": true, "alg unknown": true, "alg lower case": true,
+		"alg trailing space": true, "alg HS256": true, "alg RSA-OAEP": true, "alg dir": true,
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, _, err := extractJWS([]byte(jwsWithHeader(tt.header)))
+			if unsupportedAlg[tt.name] {
+				requireProblem(t, err, joseBadSigAlgType)
+				return
+			}
 			requireMalformed(t, err)
 		})
 	}

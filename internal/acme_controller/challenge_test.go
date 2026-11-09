@@ -100,28 +100,44 @@ func TestInitiateChallengeRejections(t *testing.T) {
 		expectProblem(t, err, malformedErr, http.StatusNotFound)
 	})
 
-	t.Run("authz already locked", func(t *testing.T) {
+	// RFC 8555 8.2: clients may re-send their response to request a retry. We report where the challenge is
+	// at, rather than failing with a 500.
+	t.Run("authz already locked reports the current challenge", func(t *testing.T) {
 		ok, err := ac.db.TryTakeAuthzLock([]byte(authzID))
 		if err != nil || !ok {
 			t.Fatal(ok, err)
 		}
 		defer ac.db.UnlockAuthz([]byte(authzID))
 
-		if _, err := ac.InitiateChallenge([]byte(authzID+"00"), owner); err == nil {
-			t.Fatal("expected error for a challenge that is already in progress")
+		chall, err := ac.InitiateChallenge([]byte(authzID+"00"), owner)
+		if err != nil {
+			t.Fatalf("a challenge that is already in progress should not be an error: %v", err)
+		}
+		if chall.Status != dtos.ChallengeStatusPending {
+			t.Errorf("challenge status = %s", chall.Status)
 		}
 		// Must not have clobbered the in-progress challenge
 		authz, _ := ac.db.GetAuthz([]byte(authzID))
-		if authz.Challenges[0].Status != dtos.ChallengeStatusPending {
-			t.Errorf("challenge status = %s", authz.Challenges[0].Status)
+		if authz.Challenges[0].Status != dtos.ChallengeStatusPending || !authz.Locked {
+			t.Errorf("authz was modified: %+v", authz)
 		}
 	})
 
-	t.Run("challenge not pending", func(t *testing.T) {
+	t.Run("challenge already answered reports its status", func(t *testing.T) {
 		for _, status := range []string{dtos.ChallengeStatusProcessing, dtos.ChallengeStatusValid, dtos.ChallengeStatusInvalid} {
 			ac.db.UpdateAuthz([]byte(authzID), func(a *db.DBAuthz) error { a.Challenges[0].Status = status; return nil })
-			if _, err := ac.InitiateChallenge([]byte(authzID+"00"), owner); err == nil {
-				t.Errorf("expected error for %s challenge", status)
+
+			chall, err := ac.InitiateChallenge([]byte(authzID+"00"), owner)
+			if err != nil {
+				t.Errorf("%s: unexpected error %v", status, err)
+				continue
+			}
+			if chall.Status != status {
+				t.Errorf("challenge status = %s, want %s", chall.Status, status)
+			}
+			// No validation should have been started (it would flip the status or take the lock)
+			if authz, _ := ac.db.GetAuthz([]byte(authzID)); authz.Locked || authz.Challenges[0].Status != status {
+				t.Errorf("%s: re-initiating changed the authz: %+v", status, authz)
 			}
 		}
 	})
@@ -157,9 +173,12 @@ func TestInitiateChallengeSuccess(t *testing.T) {
 	keyAuth := token + "." + base64.RawURLEncoding.EncodeToString(thumb)
 
 	var gotHost, gotPath string
+	var requests int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHost, gotPath = r.Host, r.URL.Path
-		w.Write([]byte(keyAuth))
+		requests++
+		// Real web servers usually end the file with a newline
+		w.Write([]byte(keyAuth + "\n"))
 	}))
 	defer srv.Close()
 
@@ -190,9 +209,16 @@ func TestInitiateChallengeSuccess(t *testing.T) {
 		t.Errorf("order = %+v, %v; want ready", got, err)
 	}
 
-	// Challenges are single use
-	if _, err := ac.InitiateChallenge([]byte(authz.ID+"00"), acc); err == nil {
-		t.Error("expected re-initiating a valid challenge to fail")
+	// Re-sending the response just reports the finished challenge, and doesn't go and validate again
+	again, err := ac.InitiateChallenge([]byte(authz.ID+"00"), acc)
+	if err != nil {
+		t.Fatalf("re-initiating a valid challenge should not be an error: %v", err)
+	}
+	if again.Status != dtos.ChallengeStatusValid || again.ValidatedTime == nil || *again.ValidatedTime != *chall.ValidatedTime {
+		t.Errorf("unexpected challenge on retry: %+v", again)
+	}
+	if requests != 1 {
+		t.Errorf("verifier was contacted %d times, want 1", requests)
 	}
 }
 

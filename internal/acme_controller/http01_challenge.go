@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,50 @@ import (
 )
 
 const HTTP01ChallengeType = "http-01"
+
+// Key authorizations are ~100 bytes; anything much bigger isn't one
+const maxKeyAuthorizationSize = 1024
+
+var http01Client = &http.Client{Timeout: 10 * time.Second}
+
+var errChallengeInProgress = errors.New("challenge validation is already in progress")
+
+func fetchKeyAuthorization(client *http.Client, challURL string) (string, error) {
+	resp, err := client.Get(challURL)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxKeyAuthorizationSize+1))
+	if err != nil {
+		return "", err
+	}
+	if len(body) > maxKeyAuthorizationSize {
+		return "", fmt.Errorf("response was larger than %d bytes", maxKeyAuthorizationSize)
+	}
+	return string(body), nil
+}
+
+func keyAuthorizationMatches(body string, token string, thumbprint []byte) bool {
+	// Check the server's response against token.base64url(thumbprint)
+
+	// RFC 8555 8.3 says to ignore trailing whitespace
+	gotToken, gotThumbprint, ok := strings.Cut(strings.TrimRight(body, " \t\r\n"), ".")
+	if !ok || gotToken != token {
+		return false
+	}
+
+	decoded, err := base64.RawURLEncoding.DecodeString(gotThumbprint)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(thumbprint, decoded)
+}
 
 func (ac ACMEController) startHTTP01Challenge(order *db.DBOrder, authz *db.DBAuthz, challengeIndex int) error {
 	errChan := make(chan error, 1)
@@ -38,7 +83,7 @@ func (ac ACMEController) doHTTP01ChallengeVerifyLoop(order *db.DBOrder, authz *d
 		return err
 	}
 	if !lockSuccess {
-		return fmt.Errorf("authz %s is locked - challenge in progress", authz.ID)
+		return fmt.Errorf("authz %s: %w", authz.ID, errChallengeInProgress)
 	}
 	defer ac.db.UnlockAuthz([]byte(authz.ID))
 	defer ac.recomputeOrderStatus([]byte(order.ID))
@@ -71,33 +116,12 @@ func (ac ACMEController) doHTTP01ChallengeVerifyLoop(order *db.DBOrder, authz *d
 	}
 
 	attempt := func() bool {
-		resp, err := http.Get(challURL.String())
+		body, err := fetchKeyAuthorization(http01Client, challURL.String())
 		if err != nil {
-			logrus.WithError(err).WithField("url", challURL.String()).Debug("failed to make request when completing challenge")
+			logrus.WithError(err).WithField("url", challURL.String()).Debug("failed to fetch key authorization when completing challenge")
 			return false
 		}
-
-		respBody, err := io.ReadAll(resp.Body)
-		if err != nil {
-			logrus.WithError(err).WithField("url", challURL.String()).Debug("failed to ready body when completing challenge")
-			return false
-		}
-
-		token, thumbprint, cutOk := strings.Cut(string(respBody), ".")
-		if !cutOk {
-			return false
-		}
-
-		if token != challenge.Token {
-			return false
-		}
-
-		decodedThumbprint, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(thumbprint, " "))
-		if err != nil {
-			return false
-		}
-
-		return bytes.Equal(computedThumbprint, decodedThumbprint)
+		return keyAuthorizationMatches(body, challenge.Token, computedThumbprint)
 	}
 
 	_, err = ac.db.UpdateAuthz([]byte(authz.ID), func(authzToUpdate *db.DBAuthz) error {

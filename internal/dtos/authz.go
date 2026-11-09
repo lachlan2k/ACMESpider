@@ -23,7 +23,7 @@ type AuthzDTO struct {
 	Expires    string              `json:"expires,omitempty"`
 	Identifier AuthzIdentifierDTO  `json:"identifier"`
 	Challenges []AuthzChallengeDTO `json:"challenges"`
-	Wildcard   bool                `json:"wildcard"`
+	Wildcard   bool                `json:"wildcard,omitempty"`
 }
 
 type AuthzIdentifierDTO struct {

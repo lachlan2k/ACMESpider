@@ -2,6 +2,7 @@ package acme_controller
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -32,6 +33,11 @@ func (ac ACMEController) splitChallengeID(challID []byte) (authzID []byte, chall
 	return
 }
 
+func (ac ACMEController) AuthzIDFromChallengeID(challID []byte) ([]byte, error) {
+	authzID, _, err := ac.splitChallengeID(challID)
+	return authzID, err
+}
+
 func (ac ACMEController) InitiateChallenge(challID []byte, requesterAccountID []byte) (*db.DBAuthzChallenge, error) {
 	authzID, challengeIndex, err := ac.splitChallengeID(challID)
 	if err != nil {
@@ -51,14 +57,25 @@ func (ac ACMEController) InitiateChallenge(challID []byte, requesterAccountID []
 		return nil, NotFoundProblem("Unknown challenge ID")
 	}
 
+	// RFC 8555 8.2 lets clients re-send their response to ask for a retry, so re-sending isn't an error while
+	// the challenge is processing. The RFC doesn't say what to do once it's valid or invalid; we report the
+	// challenge as it stands rather than failing the request.
+	if existing := authz.Challenges[challengeIndex]; existing.Status != dtos.ChallengeStatusPending {
+		return &existing, nil
+	}
+
 	order, err := ac.db.GetOrder([]byte(authz.OrderID))
 	if err != nil {
 		return nil, InternalErrorProblem(fmt.Errorf("failed to get order when initiating challenge: %v", err))
 	}
 
 	err = ac.startHTTP01Challenge(order, authz, challengeIndex)
-	if err != nil {
-		return nil, err
+	if err != nil && !errors.Is(err, errChallengeInProgress) {
+		var pd *ProblemDetails
+		if errors.As(err, &pd) {
+			return nil, pd
+		}
+		return nil, InternalErrorProblem(err)
 	}
 
 	latestAuthz, err := ac.db.GetAuthz(authzID)
@@ -89,7 +106,8 @@ func (ac ACMEController) recomputeOrderStatus(orderID []byte) error {
 	// Check if its expired
 	if timeUnmarshalDB(order.Expires).Before(time.Now()) {
 		_, err := ac.db.UpdateOrder(orderID, func(orderToUpdate *db.DBOrder) error {
-			orderToUpdate.Status = dtos.OrderStatusExpired
+			// RFC 8555 7.1.6: an order that expires moves to invalid
+			orderToUpdate.Status = dtos.OrderStatusInvalid
 			return nil
 		})
 		if err != nil {
@@ -110,9 +128,19 @@ func (ac ACMEController) recomputeOrderStatus(orderID []byte) error {
 		if err != nil {
 			return err
 		}
-		if authz.Status != dtos.AuthzStatusValid {
+
+		switch authz.Status {
+		case dtos.AuthzStatusValid:
+			// do nothing :)
+		case dtos.AuthzStatusInvalid, dtos.AuthzStatusExpired, dtos.AuthzStatusRevoked, dtos.AuthzStatusDeactivated:
+			// RFC 8555 7.1.6: an authz in a final state other than valid makes the order invalid
+			_, err := ac.db.UpdateOrder(orderID, func(orderToUpdate *db.DBOrder) error {
+				orderToUpdate.Status = dtos.OrderStatusInvalid
+				return nil
+			})
+			return err
+		default:
 			allValid = false
-			break
 		}
 	}
 

@@ -169,6 +169,12 @@ func expectProblem(t *testing.T, res mwResult, wantType string, wantStatus int) 
 	}
 }
 
+// RFC 8555 6.5: a missing, unknown, expired or reused nonce is a badNonce (400)
+func expectBadNonce(t *testing.T, res mwResult) {
+	t.Helper()
+	expectProblem(t, res, "urn:ietf:params:acme:error:badNonce", http.StatusBadRequest)
+}
+
 func expectMalformed(t *testing.T, res mwResult) {
 	t.Helper()
 	expectProblem(t, res, errMalformed, http.StatusBadRequest)
@@ -456,28 +462,46 @@ func TestValidateJWS_Nonce(t *testing.T) {
 		e := newJoseEnv(t)
 		s := e.validSpec(t)
 		s.nonce = nil
-		expectMalformed(t, e.runJWS(s.sign(t), true, false))
+		expectBadNonce(t, e.runJWS(s.sign(t), true, false))
 	})
 
 	t.Run("empty", func(t *testing.T) {
 		e := newJoseEnv(t)
 		s := e.validSpec(t)
 		s.nonce = sp("")
-		expectMalformed(t, e.runJWS(s.sign(t), true, false))
+		expectBadNonce(t, e.runJWS(s.sign(t), true, false))
 	})
 
 	t.Run("garbage", func(t *testing.T) {
 		e := newJoseEnv(t)
 		s := e.validSpec(t)
 		s.nonce = sp("not-a-real-nonce")
-		expectMalformed(t, e.runJWS(s.sign(t), true, false))
+		expectBadNonce(t, e.runJWS(s.sign(t), true, false))
 	})
 
-	t.Run("not base64", func(t *testing.T) {
+	// RFC 8555 6.5.2: a nonce that isn't valid base64url is a malformed JWS, not a badNonce
+	for name, n := range map[string]string{
+		"not base64":        "!!!@@@",
+		"padded":            "abcd efgh=",
+		"padding only":      "abc=",
+		"standard base64":   "ab+/cd/+",
+		"whitespace":        "abcd\nefgh",
+		"impossible length": "abcde",
+		"non-ascii":         "abcd\u00e9fgh",
+	} {
+		t.Run("invalid encoding: "+name, func(t *testing.T) {
+			e := newJoseEnv(t)
+			s := e.validSpec(t)
+			s.nonce = sp(n)
+			expectMalformed(t, e.runJWS(s.sign(t), true, false))
+		})
+	}
+
+	t.Run("well-formed encoding but never issued is a badNonce", func(t *testing.T) {
 		e := newJoseEnv(t)
 		s := e.validSpec(t)
-		s.nonce = sp("!!!@@@")
-		expectMalformed(t, e.runJWS(s.sign(t), true, false))
+		s.nonce = sp(strings.Repeat("A", 96))
+		expectBadNonce(t, e.runJWS(s.sign(t), true, false))
 	})
 
 	t.Run("replayed", func(t *testing.T) {
@@ -486,7 +510,7 @@ func TestValidateJWS_Nonce(t *testing.T) {
 		if res := e.runJWS(body, true, false); res.err != nil {
 			t.Fatal(res.err)
 		}
-		expectMalformed(t, e.runJWS(body, true, false))
+		expectBadNonce(t, e.runJWS(body, true, false))
 	})
 
 	t.Run("from a different server instance", func(t *testing.T) {
@@ -495,7 +519,7 @@ func TestValidateJWS_Nonce(t *testing.T) {
 		n, _ := other.Gen()
 		s := e.validSpec(t)
 		s.nonce = &n
-		expectMalformed(t, e.runJWS(s.sign(t), true, false))
+		expectBadNonce(t, e.runJWS(s.sign(t), true, false))
 	})
 
 	t.Run("bad signature does not consume nonce", func(t *testing.T) {
@@ -531,7 +555,15 @@ func TestValidateJWS_URL(t *testing.T) {
 			e := newJoseEnv(t)
 			s := e.validSpec(t)
 			s.url = tt.url
-			expectMalformed(t, e.runJWS(s.sign(t), true, false))
+
+			res := e.runJWS(s.sign(t), true, false)
+			if tt.url == nil {
+				// RFC 8555 6.2 requires the header, so a JWS without one is malformed
+				expectMalformed(t, res)
+				return
+			}
+			// A url that doesn't match the request is unauthorized (RFC 8555 6.4)
+			expectProblem(t, res, errUnauthorized, http.StatusForbidden)
 		})
 	}
 
@@ -557,7 +589,7 @@ func TestValidateJWS_URL(t *testing.T) {
 			t.Fatal("next called")
 		}
 		var pd *acme_controller.ProblemDetails
-		if !errors.As(err, &pd) || pd.Type != errMalformed {
+		if !errors.As(err, &pd) || pd.Type != errUnauthorized || pd.HTTPStatus != http.StatusForbidden {
 			t.Fatalf("got %v", err)
 		}
 	})

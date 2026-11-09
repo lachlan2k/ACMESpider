@@ -4,3 +4,4 @@ test/
 acmespider.db
 main
 .env
+rfc8555.txt

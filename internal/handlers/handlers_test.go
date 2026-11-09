@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -207,6 +208,31 @@ func TestErrorHandler(t *testing.T) {
 		}
 	})
 
+	// RFC 8555 6.7 / RFC 7807
+	t.Run("problems are application/problem+json", func(t *testing.T) {
+		for _, err := range []error{
+			acme_controller.MalformedProblem("x"),
+			acme_controller.InternalErrorProblem(errors.New("x")),
+			errors.New("plain"),
+			echo.ErrNotFound,
+			echo.ErrMethodNotAllowed,
+		} {
+			c, rec := e.ctx(ctxOpts{})
+			handler(err, c)
+			if ct := rec.Header().Get("Content-Type"); ct != "application/problem+json" {
+				t.Errorf("%v: Content-Type = %q", err, ct)
+			}
+		}
+	})
+
+	t.Run("wrapped problems are still recognised", func(t *testing.T) {
+		c, rec := e.ctx(ctxOpts{})
+		handler(fmt.Errorf("context: %w", acme_controller.BadNonceProblem("stale")), c)
+		if rec.Code != http.StatusBadRequest || decode[dtos.ProblemDTO](t, rec).Type != "urn:ietf:params:acme:error:badNonce" {
+			t.Errorf("code=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+
 	t.Run("internal problem does not leak the cause", func(t *testing.T) {
 		c, rec := e.ctx(ctxOpts{})
 		handler(acme_controller.InternalErrorProblem(errors.New("secret db path /var/lib/foo")), c)
@@ -216,11 +242,47 @@ func TestErrorHandler(t *testing.T) {
 		}
 	})
 
-	t.Run("unknown plain error is a 500", func(t *testing.T) {
+	t.Run("unexpected plain error becomes a serverInternal problem with an id, without the cause", func(t *testing.T) {
 		c, rec := e.ctx(ctxOpts{})
 		handler(errors.New("boom"), c)
+
 		if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "boom") {
-			t.Errorf("code=%d body=%s", rec.Code, rec.Body.String())
+			t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+		}
+		body := decode[dtos.ProblemDTO](t, rec)
+		if body.Type != errInternal || !strings.HasPrefix(body.Detail, "Error ID ") {
+			t.Errorf("body = %+v", body)
+		}
+	})
+
+	t.Run("echo not found and method not allowed become problems", func(t *testing.T) {
+		c, rec := e.ctx(ctxOpts{})
+		handler(echo.ErrNotFound, c)
+		if rec.Code != http.StatusNotFound || decode[dtos.ProblemDTO](t, rec).Type != errMalformed {
+			t.Errorf("not found: code=%d body=%s", rec.Code, rec.Body.String())
+		}
+
+		c, rec = e.ctx(ctxOpts{})
+		handler(echo.ErrMethodNotAllowed, c)
+		if rec.Code != http.StatusMethodNotAllowed || decode[dtos.ProblemDTO](t, rec).Type != errMalformed {
+			t.Errorf("method not allowed: code=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("other echo errors keep their status", func(t *testing.T) {
+		c, rec := e.ctx(ctxOpts{})
+		handler(echo.ErrNotImplemented, c)
+		if rec.Code != http.StatusNotImplemented {
+			t.Errorf("code = %d", rec.Code)
+		}
+	})
+
+	t.Run("nothing is written once the response is committed", func(t *testing.T) {
+		c, rec := e.ctx(ctxOpts{})
+		c.NoContent(http.StatusNoContent)
+		handler(acme_controller.MalformedProblem("late"), c)
+		if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
+			t.Errorf("code=%d body=%q", rec.Code, rec.Body.String())
 		}
 	})
 }
@@ -252,6 +314,37 @@ func TestNewAccountHandler(t *testing.T) {
 		if _, err := e.h.AcmeCtrl.GetAccountKey(id); err != nil {
 			t.Errorf("account key not stored: %v", err)
 		}
+	})
+
+	// RFC 8555 7.3: with terms of service published, agreement is mandatory
+	t.Run("terms of service", func(t *testing.T) {
+		withToS := *e
+		withToS.h.LinkCtrl.MetaTosURL = "https://example.com/tos"
+
+		for _, body := range []string{`{}`, `{"termsOfServiceAgreed":false}`, `{"contact":["mailto:a@example.com"]}`} {
+			c, _ := withToS.ctx(ctxOpts{payload: []byte(body), header: &jose.Header{JSONWebKey: jwk}})
+			wantProblem(t, withToS.h.NewAccount(c), errMalformed, http.StatusBadRequest)
+		}
+
+		c, rec := withToS.ctx(ctxOpts{payload: []byte(`{"termsOfServiceAgreed":true}`), header: &jose.Header{JSONWebKey: jwk}})
+		if err := withToS.h.NewAccount(c); err != nil || rec.Code != http.StatusCreated {
+			t.Errorf("agreeing should work: code=%d err=%v", rec.Code, err)
+		}
+	})
+
+	t.Run("no terms of service published means agreement isn't required", func(t *testing.T) {
+		c, rec := e.ctx(ctxOpts{payload: []byte(`{}`), header: &jose.Header{JSONWebKey: jwk}})
+		if err := e.h.NewAccount(c); err != nil || rec.Code != http.StatusCreated {
+			t.Errorf("code=%d err=%v", rec.Code, err)
+		}
+	})
+
+	t.Run("invalid contacts", func(t *testing.T) {
+		c, _ := e.ctx(ctxOpts{payload: []byte(`{"contact":["tel:+1555"]}`), header: &jose.Header{JSONWebKey: jwk}})
+		wantProblem(t, e.h.NewAccount(c), "urn:ietf:params:acme:error:unsupportedContact", http.StatusBadRequest)
+
+		c, _ = e.ctx(ctxOpts{payload: []byte(`{"contact":["mailto:nope"]}`), header: &jose.Header{JSONWebKey: jwk}})
+		wantProblem(t, e.h.NewAccount(c), "urn:ietf:params:acme:error:invalidContact", http.StatusBadRequest)
 	})
 
 	t.Run("invalid json payload", func(t *testing.T) {
@@ -296,6 +389,11 @@ func TestGetOrUpdateAccountHandler(t *testing.T) {
 		if body := decode[dtos.AccountResponseDTO](t, rec); len(body.Contact) != 1 || body.Contact[0] != "mailto:new@example.com" {
 			t.Errorf("body = %+v", body)
 		}
+	})
+
+	t.Run("update with invalid contact", func(t *testing.T) {
+		c, _ := e.ctx(ctxOpts{payload: []byte(`{"contact":["http://example.com"]}`), accountID: acc, params: param})
+		wantProblem(t, e.h.GetOrUpdateAccount(c), "urn:ietf:params:acme:error:unsupportedContact", http.StatusBadRequest)
 	})
 
 	t.Run("other account's id in url", func(t *testing.T) {
@@ -357,16 +455,23 @@ func TestOrderHandlers(t *testing.T) {
 		if body.Status != "pending" || len(body.AuthorizationURLs) != 1 || !strings.HasPrefix(body.FinalizeURL, "https://example.com/acme/order/") {
 			t.Errorf("body = %+v", body)
 		}
+		// RFC 8555 7.1.3: there is no certificate to link to until the order is valid
+		if raw := decode[map[string]any](t, rec); raw["certificate"] != nil {
+			t.Errorf("pending order should not have a certificate URL, got %v", raw["certificate"])
+		}
 		if loc := rec.Header().Get("Location"); !strings.HasPrefix(loc, "https://example.com/acme/order/") || strings.HasSuffix(loc, "/finalize") {
 			t.Errorf("Location = %q", loc)
 		}
 	})
 
 	t.Run("new order rejects bad input", func(t *testing.T) {
-		for _, payload := range []string{"{", `{"identifiers":[{"type":"ip","value":"1.2.3.4"}]}`, `{"identifiers":[{"type":"dns","value":""}]}`} {
+		for _, payload := range []string{"{", `{"identifiers":[{"type":"dns","value":""}]}`, `{"identifiers":[]}`, `{}`} {
 			c, _ := e.ctx(ctxOpts{payload: []byte(payload), accountID: acc})
 			wantProblem(t, e.h.NewOrder(c), errMalformed, http.StatusBadRequest)
 		}
+
+		c, _ := e.ctx(ctxOpts{payload: []byte(`{"identifiers":[{"type":"ip","value":"1.2.3.4"}]}`), accountID: acc})
+		wantProblem(t, e.h.NewOrder(c), "urn:ietf:params:acme:error:unsupportedIdentifier", http.StatusBadRequest)
 	})
 
 	t.Run("new order without account", func(t *testing.T) {
@@ -483,6 +588,14 @@ func TestGetAuthorizationHandler(t *testing.T) {
 	if want := "https://example.com/acme/chall/" + authzID + "00"; body.Challenges[0].URL != want {
 		t.Errorf("challenge URL = %q, want %q", body.Challenges[0].URL, want)
 	}
+	if body.Expires == "" {
+		t.Error("authz should carry an expiry")
+	}
+
+	// RFC 8555 7.1.4: "wildcard" must be absent unless it's true
+	if raw := decode[map[string]any](t, rec); raw["wildcard"] != nil {
+		t.Errorf("wildcard should be absent for a non-wildcard authz, got %v", raw["wildcard"])
+	}
 
 	c, _ = e.ctx(ctxOpts{payload: []byte{}, accountID: other, params: param})
 	wantProblem(t, e.h.GetAuthorization(c), errUnauthorized, http.StatusForbidden)
@@ -534,6 +647,52 @@ func TestInitiateChallengeHandlerRejections(t *testing.T) {
 		c, _ := e.ctx(ctxOpts{payload: []byte("{}"), accountID: acc, params: map[string]string{e.h.LinkCtrl.ChallengeIDParam(): strings.TrimSuffix(challID, "00") + "05"}})
 		wantProblem(t, e.h.InitiateChallenge(c), errMalformed, http.StatusNotFound)
 	})
+}
+
+// RFC 8555 7.1: a challenge resource links to its authorization with rel="up". certbot's ACME library raises
+// '"up" Link header missing' without it (found by running certbot against ACMESpider).
+func TestInitiateChallengeHandlerLinksToAuthz(t *testing.T) {
+	e := newJoseEnv(t)
+	acc := e.accountID()
+	order := e.makeOrder(t, acc, "a.example.com")
+	authzID := lastSegment(order.AuthorizationURLs[0])
+	challID := authzID + "00"
+
+	// A challenge that's already valid is reported as-is, which lets this exercise the success response
+	// without needing a real HTTP-01 target
+	if _, err := e.db.UpdateAuthz([]byte(authzID), func(a *db.DBAuthz) error {
+		a.Challenges[0].Status = dtos.ChallengeStatusValid
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	c, rec := e.ctx(ctxOpts{payload: []byte("{}"), accountID: acc, params: map[string]string{e.h.LinkCtrl.ChallengeIDParam(): challID}})
+	if err := e.h.InitiateChallenge(c); err != nil {
+		t.Fatal(err)
+	}
+
+	want := `<https://example.com/acme/authz/` + authzID + `>;rel="up"`
+	links := rec.Header().Values("Link")
+	if len(links) != 1 || links[0] != want {
+		t.Errorf("Link headers = %q, want [%s]", links, want)
+	}
+	if body := decode[dtos.AuthzChallengeDTO](t, rec); body.Status != "valid" || !strings.HasSuffix(body.URL, "/chall/"+challID) {
+		t.Errorf("body = %+v", body)
+	}
+}
+
+func TestAddLinkAppends(t *testing.T) {
+	e := newJoseEnv(t)
+	c, rec := e.ctx(ctxOpts{})
+
+	e.h.addLink(c, "https://example.com/acme/directory", "index")
+	e.h.addLink(c, "https://example.com/acme/authz/x", "up")
+
+	got := rec.Header().Values("Link")
+	if len(got) != 2 || got[0] != `<https://example.com/acme/directory>;rel="index"` || got[1] != `<https://example.com/acme/authz/x>;rel="up"` {
+		t.Errorf("Link headers = %q: a second link must not replace the first", got)
+	}
 }
 
 func TestGetCertificateHandler(t *testing.T) {

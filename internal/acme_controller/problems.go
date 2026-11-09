@@ -8,23 +8,25 @@ import (
 )
 
 const (
-	errNS                  = "urn:ietf:params:acme:error:"
-	serverInternalErr      = errNS + "serverInternal"
-	malformedErr           = errNS + "malformed"
-	badNonceErr            = errNS + "badNonce"
-	badCSRErr              = errNS + "badCSR"
-	agreementReqErr        = errNS + "agreementRequired"
-	externalAccountReqErr  = errNS + "externalAccountRequired"
-	connectionErr          = errNS + "connection"
-	unauthorizedErr        = errNS + "unauthorized"
-	invalidContactErr      = errNS + "invalidContact"
-	unsupportedContactErr  = errNS + "unsupportedContact"
-	accountDoesNotExistErr = errNS + "accountDoesNotExist"
-	badRevocationReasonErr = errNS + "badRevocationReason"
-	alreadyRevokedErr      = errNS + "alreadyRevoked"
-	orderNotReadyErr       = errNS + "orderNotReady"
-	badPublicKeyErr        = errNS + "badPublicKey"
-	rejectedIdentifierErr  = errNS + "rejectedIdentifier"
+	errNS                    = "urn:ietf:params:acme:error:"
+	serverInternalErr        = errNS + "serverInternal"
+	malformedErr             = errNS + "malformed"
+	badNonceErr              = errNS + "badNonce"
+	badCSRErr                = errNS + "badCSR"
+	agreementReqErr          = errNS + "agreementRequired"
+	externalAccountReqErr    = errNS + "externalAccountRequired"
+	connectionErr            = errNS + "connection"
+	unauthorizedErr          = errNS + "unauthorized"
+	invalidContactErr        = errNS + "invalidContact"
+	unsupportedContactErr    = errNS + "unsupportedContact"
+	accountDoesNotExistErr   = errNS + "accountDoesNotExist"
+	badRevocationReasonErr   = errNS + "badRevocationReason"
+	alreadyRevokedErr        = errNS + "alreadyRevoked"
+	orderNotReadyErr         = errNS + "orderNotReady"
+	badPublicKeyErr          = errNS + "badPublicKey"
+	rejectedIdentifierErr    = errNS + "rejectedIdentifier"
+	badSignatureAlgErr       = errNS + "badSignatureAlgorithm"
+	unsupportedIdentifierErr = errNS + "unsupportedIdentifier"
 )
 
 type ProblemDetails struct {
@@ -33,6 +35,7 @@ type ProblemDetails struct {
 	HTTPStatus  int                          `json:"status,omitempty"`
 	Identifier  *IdentifierForProblemDetails `json:"identifier,omitempty"`
 	Subproblems []ProblemDetails             `json:"subproblems,omitempty"`
+	Algorithms  []string                     `json:"algorithms,omitempty"`
 	wrapped     error
 	wrappedId   string
 }
@@ -222,5 +225,22 @@ func RejectedIdentifierProblem(ident IdentifierForProblemDetails, detail string)
 				Detail:     fmt.Sprintf("%s is a forbidden domain", ident.Value),
 			},
 		},
+	}
+}
+
+func BadSignatureAlgorithmProblem(detail string, supportedAlgs []string) *ProblemDetails {
+	return &ProblemDetails{
+		Type:       badSignatureAlgErr,
+		Detail:     detail,
+		HTTPStatus: http.StatusBadRequest,
+		Algorithms: supportedAlgs,
+	}
+}
+
+func UnsupportedIdentifierProblem(detail string) *ProblemDetails {
+	return &ProblemDetails{
+		Type:       unsupportedIdentifierErr,
+		Detail:     detail,
+		HTTPStatus: http.StatusBadRequest,
 	}
 }

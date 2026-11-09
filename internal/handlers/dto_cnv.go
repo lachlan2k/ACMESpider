@@ -45,6 +45,11 @@ func (h Handlers) dbOrderToDTO(order *db.DBOrder) dtos.OrderResponseDTO {
 		}
 	}
 
+	certURL := ""
+	if order.CertificateID != "" {
+		certURL = h.LinkCtrl.CertPath(order.CertificateID).Abs()
+	}
+
 	return dtos.OrderResponseDTO{
 		Status:            order.Status,
 		Expires:           time64ToString(order.Expires),
@@ -54,7 +59,7 @@ func (h Handlers) dbOrderToDTO(order *db.DBOrder) dtos.OrderResponseDTO {
 		AuthorizationURLs: authzURLs,
 		Error:             errProblem,
 		FinalizeURL:       h.LinkCtrl.FinalizeOrderPath(order.ID).Abs(),
-		CertificateURL:    h.LinkCtrl.CertPath(order.CertificateID).Abs(),
+		CertificateURL:    certURL,
 	}
 }
 

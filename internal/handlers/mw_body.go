@@ -84,6 +84,22 @@ func getAccountID(c echo.Context) ([]byte, error) {
 	return out, nil
 }
 
+// isBase64URL checks s is made only of the base64url alphabet, with no padding, and could be the encoding of
+// some octet string. Go's decoder would also accept embedded newlines, which the RFC 7515 profile doesn't.
+func isBase64URL(s string) bool {
+	if len(s)%4 == 1 {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func (h Handlers) validateJWSAndExtractPayload(next echo.HandlerFunc, c echo.Context, allowKID bool, allowJWK bool) error {
 	if c.Request().Header.Get("Content-Type") != "application/jose+json" {
 		return acme_controller.UnsupportedMediaTypeProblem("")
@@ -143,12 +159,20 @@ func (h Handlers) validateJWSAndExtractPayload(next echo.HandlerFunc, c echo.Con
 	}
 
 	// 4. Consume the nonce and check its okay
+	// RFC 8555 6.5.2: a nonce that isn't valid base64url (no padding) makes the JWS malformed. A missing or
+	// empty nonce is "not present", which is a badNonce below.
+	if protected.Nonce != "" && !isBase64URL(protected.Nonce) {
+		return acme_controller.MalformedProblem("nonce was not valid base64url")
+	}
+
 	nonceOk, nonceErr := h.NonceCtrl.ValidateAndConsume(protected.Nonce)
 	if nonceErr != nil {
-		log.WithError(err).Debugf("failed to validate nonce: %v", nonceErr)
+		log.WithError(nonceErr).Debug("failed to validate nonce")
 	}
 	if !nonceOk || nonceErr != nil {
-		return acme_controller.MalformedProblem("nonce was invalid")
+		// RFC 8555 6.5: a missing, unknown, expired or reused nonce is a badNonce, and the response
+		// carries a fresh nonce to retry with
+		return acme_controller.BadNonceProblem("nonce was invalid")
 	}
 
 	// 5. Ensure the URL in the protected headers matches the URL requested
@@ -158,7 +182,8 @@ func (h Handlers) validateJWSAndExtractPayload(next echo.HandlerFunc, c echo.Con
 		return acme_controller.MalformedProblem("JWS header did not contain a URL")
 	}
 	if !h.LinkCtrl.CompareURL(c.Request().RequestURI, protURLStr) {
-		return acme_controller.MalformedProblem(fmt.Sprintf("URL in JWS header did not match URL requested (%s vs %s)", c.Request().URL.String(), protURLStr))
+		// RFC 8555 6.4: a url that doesn't match the request must be rejected as unauthorized
+		return acme_controller.UnauthorizedProblem(fmt.Sprintf("URL in JWS header did not match URL requested (%s vs %s)", c.Request().URL.String(), protURLStr))
 	}
 
 	c.Set(payloadBodyCtxKey, payload)

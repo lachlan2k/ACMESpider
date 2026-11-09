@@ -2,13 +2,46 @@ package acme_controller
 
 import (
 	"bytes"
+	"fmt"
+	"net/mail"
+	"net/url"
+	"strings"
 
 	"github.com/go-jose/go-jose/v3"
 	"github.com/lachlan2k/acmespider/internal/db"
 	"github.com/lachlan2k/acmespider/internal/dtos"
 )
 
+func validateContacts(contacts []string) error {
+	// RFC 8555 7.3 says we _SHOULD_ validate contacts
+	// and if we do validate, we _MUST_ support mailto:
+	// ...and we _SHOULD_ reject hfields.
+	for i, contact := range contacts {
+		u, err := url.Parse(contact)
+		if err != nil || u.Scheme == "" {
+			return InvalidContactProblem(fmt.Sprintf("contact %d is not a valid URL", i))
+		}
+
+		if !strings.EqualFold(u.Scheme, "mailto") {
+			return UnsupportedContactProblem(fmt.Sprintf("contact %d uses the %q scheme, but only mailto: is supported", i, u.Scheme))
+		}
+
+		addr := u.Opaque
+		if addr == "" || u.RawQuery != "" || strings.Contains(contact, "?") || u.Fragment != "" || strings.Contains(addr, ",") {
+			return InvalidContactProblem(fmt.Sprintf("contact %d must be a mailto: URL with a single address and no header fields", i))
+		}
+		if parsed, err := mail.ParseAddress(addr); err != nil || parsed.Address != addr {
+			return InvalidContactProblem(fmt.Sprintf("contact %d does not contain a valid email address", i))
+		}
+	}
+	return nil
+}
+
 func (ac ACMEController) NewAccount(payload dtos.AccountRequestDTO, jwk jose.JSONWebKey) (*db.DBAccount, error) {
+	if err := validateContacts(payload.Contact); err != nil {
+		return nil, err
+	}
+
 	newId, err := GenerateID()
 
 	if err != nil {
@@ -54,6 +87,12 @@ func (ac ACMEController) GetAccountKey(accountID []byte) (*jose.JSONWebKey, erro
 func (ac ACMEController) UpdateAccount(accountIDToQuery []byte, requestAccountID []byte, payload dtos.AccountRequestDTO) (*db.DBAccount, error) {
 	if !bytes.Equal(accountIDToQuery, requestAccountID) {
 		return nil, UnauthorizedProblem("Account ID did not match requested account")
+	}
+
+	if payload.Status != dtos.AccountStatusDeactivated {
+		if err := validateContacts(payload.Contact); err != nil {
+			return nil, err
+		}
 	}
 
 	acc, err := ac.db.GetAccount(accountIDToQuery)

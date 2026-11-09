@@ -220,7 +220,7 @@ func registerRoutes(app *echo.Echo, h handlers.Handlers, l links.LinkController)
 	acmeAPI.POST(l.AccountKeyChangePath().Relative(), h.NotImplemented, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
 
 	acmeAPI.POST(l.NewOrderPath().Relative(), h.NewOrder, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
-	acmeAPI.POST(l.OrderPath(":"+l.OrderIDParam()).Relative(), h.GetOrder, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
+	acmeAPI.POST(l.OrderPath(":"+l.OrderIDParam()).Relative(), h.GetOrder, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload, h.POSTAsGETMw)
 	acmeAPI.POST(l.AccountOrdersPath(":"+l.AccountIDParam()).Relative(), h.GetOrdersByAccountID, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload, h.POSTAsGETMw)
 	acmeAPI.POST(l.FinalizeOrderPath(":"+l.OrderIDParam()).Relative(), h.FinalizeOrder, h.AddNonceMw, h.ValidateJWSWithKIDAndExtractPayload)
 

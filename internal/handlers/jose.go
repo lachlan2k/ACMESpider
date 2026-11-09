@@ -13,6 +13,8 @@ import (
 
 const minRSAKeySize = 2048 / 8
 
+var supportedSigningAlgorithms = []string{"ES256", "ES384", "ES512", "EdDSA", "RS256", "RS384", "RS512"}
+
 func checkJWKAlgorithmValidForAccount(alg string, key *jose.JSONWebKey) error {
 	switch jose.SignatureAlgorithm(alg) {
 	case jose.EdDSA, jose.ES256, jose.ES384, jose.ES512:
@@ -25,17 +27,21 @@ func checkJWKAlgorithmValidForAccount(alg string, key *jose.JSONWebKey) error {
 
 		rsaKey, ok := key.Key.(*rsa.PublicKey)
 		if !ok {
-			return fmt.Errorf("couldn't check RSA key")
+			return acme_controller.BadPublicKeyProblem(fmt.Sprintf("Algorithm %s requires an RSA key", alg))
 		}
 
 		if rsaKey.Size() < minRSAKeySize {
-			return fmt.Errorf("rsa key was too small: %d bits, minimum is %d bits", rsaKey.Size()*8, minRSAKeySize*8)
+			return acme_controller.BadPublicKeyProblem(fmt.Sprintf("RSA key was too small: %d bits, minimum is %d bits", rsaKey.Size()*8, minRSAKeySize*8))
 		}
 
 		return nil
 
+	case "":
+		return acme_controller.MalformedProblem("JWS protected header did not contain an algorithm")
+
 	default:
-		return fmt.Errorf("algorithm %s is not supported", alg)
+		// Includes "none" and the MAC algorithms, which RFC 8555 6.2 forbids
+		return acme_controller.BadSignatureAlgorithmProblem(fmt.Sprintf("Algorithm %q is not supported", alg), supportedSigningAlgorithms)
 	}
 }
 
@@ -81,7 +87,7 @@ func extractJWS(requestBody []byte) (*jose.JSONWebSignature, *jose.Signature, er
 	protected := jws.Signatures[0].Protected
 	algCheck := checkJWKAlgorithmValidForAccount(protected.Algorithm, protected.JSONWebKey)
 	if algCheck != nil {
-		return nil, nil, acme_controller.MalformedProblem(fmt.Sprintf("Supplied JWS algorithm of %s is not valid: %s", protected.Algorithm, algCheck.Error()))
+		return nil, nil, algCheck
 	}
 
 	return jws, &jws.Signatures[0], nil

@@ -69,6 +69,9 @@ func TestDBOrderToDTOOptionalFields(t *testing.T) {
 	if got.Error == nil || got.Error.HTTPStatus != 500 || got.Error.Detail != "Error ID err-123" {
 		t.Errorf("unexpected error problem: %+v", got.Error)
 	}
+	if got.CertificateURL != "" {
+		t.Errorf("an order without a certificate must not link to one, got %q", got.CertificateURL)
+	}
 }
 
 func TestDBAuthzToDTO(t *testing.T) {
