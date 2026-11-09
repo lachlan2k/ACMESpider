@@ -1,0 +1,59 @@
+# Local ACME ecosystem for end-to-end tests: nothing here is exposed publicly and no real CA is involved.
+#
+#   pebble          Let's Encrypt's test CA. ACMESpider is its (only) client, like it would be for the real thing.
+#   dnsmock         A small authoritative DNS server (e2e/dnsmock) for the .test zone. ACMESpider's DNS-01 provider
+#                   publishes TXT records here, and pebble validates against it.
+#   acmespider      The thing under test. The real clients (certbot, caddy, ...) talk to this.
+#
+# ACME clients run as separate containers on the same network (see run.sh), each with a network alias such
+# as certbot.test, so ACMESpider's HTTP-01 fetch of http://certbot.test/.well-known/... lands on the client.
+name: acmespider-e2e
+
+services:
+  dnsmock:
+    image: acmespider-e2e-dnsmock:local
+    environment:
+      DNSMOCK_ZONE: test.
+    networks:
+      default:
+        aliases: [ns.test]   # lego resolves the zone's NS name with the system resolver before querying it
+    ports: ["8055:8055"]
+
+  pebble:
+    image: ghcr.io/letsencrypt/pebble:latest
+    command: ["-config", "/test/config/pebble-config.json", "-dnsserver", "dnsmock:53"]
+    environment:
+      PEBBLE_VA_NOSLEEP: "1"
+      PEBBLE_WFE_NONCEREJECT: "${PEBBLE_NONCE_REJECT:-0}"
+    ports: ["14000:14000", "15000:15000"]
+    depends_on: [dnsmock]
+
+  acmespider:
+    image: acmespider-e2e:local
+    restart: on-failure   # it registers with pebble on startup, which may not be listening yet
+    environment:
+      LEGO_CA_CERTIFICATES: /pebble.minica.pem
+      EXEC_PATH: /app/dns-exec.sh
+      DNSMOCK_MGMT: http://dnsmock:8055
+      EXEC_PROPAGATION_TIMEOUT: "30"
+      EXEC_POLLING_INTERVAL: "1"
+      EXEC_SEQUENCE_INTERVAL: "1"   # the exec provider otherwise waits ~a minute between the domains of one order
+      # TLS on, as in the README: ACMESpider gets its own certificate from the upstream CA (pebble) at startup
+      ACMESPIDER_PORT: "443"
+      ACMESPIDER_TLS: "true"
+      ACMESPIDER_HOSTNAME: acmespider.test
+      ACMESPIDER_BASE_URL: https://acmespider.test
+      ACMESPIDER_ACME_CA_DIRECTORY: https://pebble:14000/dir
+      ACMESPIDER_ACME_TOS_ACCEPT: "true"
+      ACMESPIDER_ACME_EMAIL: e2e@example.com
+      ACMESPIDER_DNS_PROVIDER: exec
+      ACMESPIDER_PUBLIC_RESOLVERS: dnsmock:53
+      ACMESPIDER_KEY_TYPE: ec256
+      ACMESPIDER_META_TOS_URL: "${E2E_TOS_URL:-}"
+    volumes:
+      - ${E2E_WORK}/pebble-test/test/certs/pebble.minica.pem:/pebble.minica.pem:ro
+    networks:
+      default:
+        aliases: [acmespider.test]
+    ports: ["14443:443"]
+    depends_on: [pebble, dnsmock]
