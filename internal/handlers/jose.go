@@ -40,12 +40,16 @@ func checkJWKAlgorithmValidForAccount(alg string, key *jose.JSONWebKey) error {
 }
 
 func extractJWS(requestBody []byte) (*jose.JSONWebSignature, *jose.Signature, error) {
-	if len(requestBody) == 0 || requestBody[0] != '{' {
-		return nil, nil, acme_controller.MalformedProblem("Invalid JWS JSON")
-	}
+	// RFC 8555 6.2
+	// "The JWS MUST be in the Flattened JSON Serialization"
+	// "The JWS MUST NOT have multiple signatures"
+	// "The JWS Unprotected Header [RFC7515] MUST NOT be used"
 
-	// we extract into here to ensure there are no dis-allowed fields
-	// before we parse with jose
+	// We extract the JWS manually into a struct to:
+	// 1) Implicitly ensure it's valid JSON (therefore flattened JSON form, not compact), as json.Unmarshal will fail if its not valid
+	// 2) Check for disallowed fields (signatures array, unprotected header)
+	// then jose checks the rest
+
 	var disallowedFields struct {
 		Header     map[string]string `json:"header"`
 		Signatures []interface{}     `json:"signatures"`
