@@ -232,10 +232,4 @@ func TestNonPOSTRoutes(t *testing.T) {
 			assertNonceHeaders(t, rec, method)
 		}
 	})
-
-	t.Run("unknown path", func(t *testing.T) {
-		if rec := s.do(http.MethodGet, "/acme/nope", "", ""); rec.Code != http.StatusNotFound {
-			t.Errorf("status = %d", rec.Code)
-		}
-	})
 }

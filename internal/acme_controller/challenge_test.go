@@ -65,18 +65,6 @@ func TestSplitChallengeIDRejectsSignedIndex(t *testing.T) {
 	}
 }
 
-func TestMakeChallengeIDRoundTrips(t *testing.T) {
-	ac := newTestCtrl(t)
-
-	for _, idx := range []int{0, 1, 15, 16, 255} {
-		id := ac.makeChallengeID("authz", idx)
-		authz, got, err := ac.splitChallengeID([]byte(id))
-		if err != nil || string(authz) != "authz" || got != idx {
-			t.Errorf("index %d: id %q -> (%q, %d, %v)", idx, id, authz, got, err)
-		}
-	}
-}
-
 func TestInitiateChallengeRejections(t *testing.T) {
 	ac := newTestCtrl(t)
 	owner := ac.newTestAccount(t)

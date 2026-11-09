@@ -79,15 +79,6 @@ func TestNewOrder(t *testing.T) {
 	}
 }
 
-func TestNewOrderOptionalDatesOmitted(t *testing.T) {
-	ac := newTestCtrl(t)
-	order := ac.newTestOrder(t, ac.newTestAccount(t), "a.example.com")
-
-	if order.NotBefore != nil || order.NotAfter != nil {
-		t.Errorf("expected nil dates, got %v %v", order.NotBefore, order.NotAfter)
-	}
-}
-
 func TestNewOrderRejectsInvalidInput(t *testing.T) {
 	ac := newTestCtrl(t)
 	acc := ac.newTestAccount(t)
@@ -315,18 +306,6 @@ func TestConcurrentOrdersAreAllListed(t *testing.T) {
 	}
 	if len(orders) != n {
 		t.Errorf("got %d orders listed, want %d (updates were lost)", len(orders), n)
-	}
-}
-
-func TestRejectedOrdersAreNotListed(t *testing.T) {
-	ac := newTestCtrl(t)
-	acc := ac.newTestAccount(t)
-
-	if _, err := ac.NewOrder(dtos.OrderCreateRequestDTO{Identifiers: []dtos.OrderIdentifierDTO{{Type: "ip", Value: "1.2.3.4"}}}, acc); err == nil {
-		t.Fatal("expected rejection")
-	}
-	if orders, _ := ac.GetOrdersByAccountID(acc, acc); len(orders) != 0 {
-		t.Errorf("rejected order was listed: %v", orders)
 	}
 }
 

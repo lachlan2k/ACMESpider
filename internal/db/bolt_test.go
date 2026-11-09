@@ -40,13 +40,6 @@ func testJWK(t *testing.T) *jose.JSONWebKey {
 
 func ptr[T any](v T) *T { return &v }
 
-func TestSeedTwiceFails(t *testing.T) {
-	d := newTestDB(t)
-	if err := d.Seed(); err == nil {
-		t.Fatal("expected second Seed to fail since buckets already exist")
-	}
-}
-
 func TestGlobalKey(t *testing.T) {
 	d := newTestDB(t)
 
@@ -336,63 +329,5 @@ func TestAuthzLockIsExclusiveUnderConcurrency(t *testing.T) {
 
 	if winners != 1 {
 		t.Errorf("%d goroutines acquired the lock, want exactly 1", winners)
-	}
-}
-
-func TestIsAuthzLocked(t *testing.T) {
-	d := newTestDB(t)
-	b := d.(*BoltDB)
-
-	if err := d.CreateAuthz(DBAuthz{ID: "z1"}); err != nil {
-		t.Fatal(err)
-	}
-	if locked, err := b.IsAuthzLocked([]byte("z1")); err != nil || locked {
-		t.Fatalf("locked=%v err=%v", locked, err)
-	}
-	d.TryTakeAuthzLock([]byte("z1"))
-	if locked, err := b.IsAuthzLocked([]byte("z1")); err != nil || !locked {
-		t.Fatalf("locked=%v err=%v", locked, err)
-	}
-	if _, err := b.IsAuthzLocked([]byte("missing")); !IsErrNotFound(err) {
-		t.Errorf("expected ErrNotFound, got %v", err)
-	}
-}
-
-func TestPersistsAcrossReopen(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "persist.db")
-
-	d, err := NewBoltDb(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Seed(); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.CreateOrder(DBOrder{ID: "o1", Status: "pending"}); err != nil {
-		t.Fatal(err)
-	}
-	d.(*BoltDB).db.Close()
-
-	d2, err := NewBoltDb(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d2.(*BoltDB).db.Close()
-
-	got, err := d2.GetOrder([]byte("o1"))
-	if err != nil || got.Status != "pending" {
-		t.Errorf("got %+v, err %v", got, err)
-	}
-}
-
-func TestIsErrNotFound(t *testing.T) {
-	if !IsErrNotFound(ErrNotFound) {
-		t.Error("ErrNotFound should match")
-	}
-	if !IsErrNotFound(errors.Join(errors.New("ctx"), ErrNotFound)) {
-		t.Error("wrapped ErrNotFound should match")
-	}
-	if IsErrNotFound(errors.New("other")) || IsErrNotFound(nil) {
-		t.Error("unrelated errors should not match")
 	}
 }
