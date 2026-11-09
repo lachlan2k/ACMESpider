@@ -95,6 +95,8 @@ func (ac ACMEController) recomputeOrderStatus(orderID []byte) error {
 		if err != nil {
 			return fmt.Errorf("failed to update order to expired: %v", err)
 		}
+		// Bail. Don't check the authz's of an expired order
+		return nil
 	}
 
 	allValid := true

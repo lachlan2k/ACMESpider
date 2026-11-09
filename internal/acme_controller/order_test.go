@@ -222,7 +222,7 @@ func TestRecomputeOrderStatus(t *testing.T) {
 			t.Fatal(err)
 		}
 		if s := status(t, ac, order.ID); s != dtos.OrderStatusExpired {
-			t.Skipf("KNOWN ISSUE: expired order was moved to %q because the all-valid check runs after the expiry update", s)
+			t.Errorf("status = %s, want expired", s)
 		}
 	})
 
