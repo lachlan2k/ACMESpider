@@ -79,10 +79,10 @@ func (ac ACMEController) recomputeOrderStatus(orderID []byte) error {
 		return err
 	}
 
-	// As of now, this function is only responsible for state changes from pending -> other things
+	// As of now, this function is only responsible for state changes from pending/ready -> other things
 	// TODO: support expiring authzs?
 	// TODO: read all state transitions in the RFC
-	if order.Status != dtos.OrderStatusPending {
+	if order.Status != dtos.OrderStatusPending && order.Status != dtos.OrderStatusReady {
 		return nil
 	}
 
@@ -96,6 +96,11 @@ func (ac ACMEController) recomputeOrderStatus(orderID []byte) error {
 			return fmt.Errorf("failed to update order to expired: %v", err)
 		}
 		// Bail. Don't check the authz's of an expired order
+		return nil
+	}
+
+	// Stop here if the order is already Ready
+	if order.Status != dtos.OrderStatusPending {
 		return nil
 	}
 

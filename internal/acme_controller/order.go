@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"crypto/x509"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/go-acme/lego/v4/certificate"
@@ -237,6 +240,93 @@ func (ac ACMEController) startProcessing(order *db.DBOrder, csr *x509.Certificat
 	}()
 }
 
+func parseCSR(csrB64 string) (*x509.CertificateRequest, error) {
+	derCSR, err := base64.RawURLEncoding.DecodeString(csrB64)
+	if err != nil {
+		return nil, BadCSRProblem("Invalid CSR Base64")
+	}
+
+	csr, err := x509.ParseCertificateRequest(derCSR)
+	if err != nil {
+		return nil, BadCSRProblem("Invalid CSR")
+	}
+
+	if err := csr.CheckSignature(); err != nil {
+		return nil, BadCSRProblem("CSR signature is invalid")
+	}
+	return csr, nil
+}
+
+func validateCSRForOrder(csr *x509.CertificateRequest, order *db.DBOrder) error {
+	// RFC 8555 7.4
+	// > A request to finalize an order will result in an error if the CA is
+    // > unwilling to issue a certificate corresponding to the submitted CSR.
+    // > For example:
+	// > - If the CSR and order identifiers differ
+	// > - If the account is not authorized for the identifiers indicated in the CSR
+
+	// Technically, we don't need to worry about this,
+	// because LetsEncrypt (or whatever upstream ACME provider) checks the CSR and we're just acting as a middleman.
+	// But, we might as well verify the CSR ourselves first.
+	// We're not too strict here about the CSR being watertight, just that its wellformed and isn't trying to request a hostname the order doesn't have
+
+	if len(csr.IPAddresses) > 0 || len(csr.EmailAddresses) > 0 || len(csr.URIs) > 0 {
+		return BadCSRProblem("CSR contains identifiers that were not requested in the order; only DNS names are supported")
+	}
+
+	requested := map[string]bool{}
+	for _, id := range order.Identifiers {
+		requested[strings.ToLower(id.Value)] = true
+	}
+
+	inCSR := map[string]bool{}
+	for _, name := range csr.DNSNames {
+		inCSR[strings.ToLower(name)] = true
+	}
+	if csr.Subject.CommonName != "" {
+		inCSR[strings.ToLower(csr.Subject.CommonName)] = true
+	}
+
+	var unexpected, missing []string
+	for name := range inCSR {
+		if !requested[name] {
+			unexpected = append(unexpected, name)
+		}
+	}
+	for name := range requested {
+		if !inCSR[name] {
+			missing = append(missing, name)
+		}
+	}
+	sort.Strings(unexpected)
+	sort.Strings(missing)
+
+	if len(unexpected) > 0 || len(missing) > 0 {
+		return BadCSRProblem(fmt.Sprintf("CSR identifiers must exactly match the order. Unexpected: %v, missing: %v", unexpected, missing))
+	}
+	return nil
+}
+
+// markOrderProcessing moves an order from ready to processing. The status check happens inside the
+// update, so of any number of concurrent finalize requests only one can win.
+func (ac ACMEController) markOrderProcessing(orderID []byte) (*db.DBOrder, error) {
+	order, err := ac.db.UpdateOrder(orderID, func(o *db.DBOrder) error {
+		if o.Status != dtos.OrderStatusReady {
+			return OrderNotReadyProblem(fmt.Sprintf("Order status is %s, expected %s", o.Status, dtos.OrderStatusReady))
+		}
+		o.Status = dtos.OrderStatusProcessing
+		return nil
+	})
+	if err != nil {
+		var pd *ProblemDetails
+		if errors.As(err, &pd) {
+			return nil, pd
+		}
+		return nil, InternalErrorProblem(err)
+	}
+	return order, nil
+}
+
 func (ac ACMEController) FinalizeOrder(orderID []byte, payload dtos.OrderFinalizeRequestDTO, requestersAccountID []byte) (*db.DBOrder, error) {
 	order, err := ac.db.GetOrder([]byte(orderID))
 	if err != nil {
@@ -250,14 +340,28 @@ func (ac ACMEController) FinalizeOrder(orderID []byte, payload dtos.OrderFinaliz
 		return nil, UnauthorizedProblem("")
 	}
 
-	derCSR, err := base64.RawURLEncoding.DecodeString(payload.CSRB64)
+	// Bring the status up to date (pending -> ready, or expiry) before deciding whether we can finalize
+	if err := ac.recomputeOrderStatus(orderID); err != nil {
+		return nil, InternalErrorProblem(err)
+	}
+	order, err = ac.db.GetOrder(orderID)
 	if err != nil {
-		return nil, BadCSRProblem("Invalid CSR Base64")
+		return nil, InternalErrorProblem(err)
+	}
+	if order.Status != dtos.OrderStatusReady {
+		return nil, OrderNotReadyProblem(fmt.Sprintf("Order status is %s, expected %s", order.Status, dtos.OrderStatusReady))
 	}
 
-	csr, err := x509.ParseCertificateRequest(derCSR)
+	// Sanity check the CSR is well-formed and signed
+	csr, err := parseCSR(payload.CSRB64)
 	if err != nil {
-		return nil, BadCSRProblem("Invalid CSR")
+		return nil, err
+	}
+
+	// Sanity check the CSR aligns with the order's requested authzs
+	err = validateCSRForOrder(csr, order)
+	if err != nil {
+		return nil, err
 	}
 
 	// Check all authz are complete
@@ -280,12 +384,9 @@ func (ac ACMEController) FinalizeOrder(orderID []byte, payload dtos.OrderFinaliz
 		naft = timeUnmarshalDB(*order.NotAfter)
 	}
 
-	orderWithProcessing, err := ac.db.UpdateOrder([]byte(order.ID), func(orderToUpdate *db.DBOrder) error {
-		orderToUpdate.Status = dtos.OrderStatusProcessing
-		return nil
-	})
+	orderWithProcessing, err := ac.markOrderProcessing([]byte(order.ID))
 	if err != nil {
-		return nil, InternalErrorProblem(err)
+		return nil, err
 	}
 
 	ac.startProcessing(order, csr, nbf, naft)

@@ -18,6 +18,7 @@ import (
 const (
 	errBadCSR   = "urn:ietf:params:acme:error:badCSR"
 	errInternal = "urn:ietf:params:acme:error:serverInternal"
+	errNotReady = "urn:ietf:params:acme:error:orderNotReady"
 )
 
 // ctxOpts sets up an echo context as if the JWS middleware had already run.
@@ -425,8 +426,19 @@ func TestFinalizeOrderHandlerRejections(t *testing.T) {
 	e := newJoseEnv(t)
 	acc := e.accountID()
 	other := e.newOtherAccount(t)
+	orderParamFor := func(order dtos.OrderResponseDTO) map[string]string {
+		return map[string]string{e.h.LinkCtrl.OrderIDParam(): lastSegment(strings.TrimSuffix(order.FinalizeURL, "/finalize"))}
+	}
+
+	// Most cases need an order that is ready to finalize, so that it's the request that gets rejected
 	order := e.makeOrder(t, acc, "a.example.com")
-	orderParam := map[string]string{e.h.LinkCtrl.OrderIDParam(): lastSegment(strings.TrimSuffix(order.FinalizeURL, "/finalize"))}
+	for _, authzURL := range order.AuthorizationURLs {
+		if _, err := e.db.UpdateAuthz([]byte(lastSegment(authzURL)), func(a *db.DBAuthz) error { a.Status = dtos.AuthzStatusValid; return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orderParam := orderParamFor(order)
+	pendingParam := orderParamFor(e.makeOrder(t, acc, "pending.example.com"))
 
 	tests := []struct {
 		name       string
@@ -437,6 +449,7 @@ func TestFinalizeOrderHandlerRejections(t *testing.T) {
 		wantStatus int
 	}{
 		{"invalid json", []byte("{"), acc, orderParam, errMalformed, http.StatusBadRequest},
+		{"order not ready", []byte(`{"csr":"AAAA"}`), acc, pendingParam, errNotReady, http.StatusForbidden},
 		{"no order id", []byte(`{"csr":"AAAA"}`), acc, nil, errMalformed, http.StatusBadRequest},
 		{"no account", []byte(`{"csr":"AAAA"}`), nil, orderParam, errInternal, http.StatusInternalServerError},
 		{"other account", []byte(`{"csr":"AAAA"}`), other, orderParam, errUnauthorized, http.StatusForbidden},

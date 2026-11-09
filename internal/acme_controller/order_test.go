@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"net"
 	"net/http"
 	"reflect"
 	"sync"
@@ -346,30 +347,144 @@ func TestGetCertificate(t *testing.T) {
 	expectUnauthorized(t, err)
 }
 
-func testCSR(t *testing.T, names ...string) string {
+type csrOpts struct {
+	cn    string
+	dns   []string
+	ips   []net.IP
+	email []string
+}
+
+func csrFromOpts(t *testing.T, o csrOpts) []byte {
 	t.Helper()
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
-		Subject:  pkix.Name{CommonName: names[0]},
-		DNSNames: names,
-	}, key)
+	tmpl := &x509.CertificateRequest{DNSNames: o.dns, IPAddresses: o.ips, EmailAddresses: o.email}
+	if o.cn != "" {
+		tmpl.Subject = pkix.Name{CommonName: o.cn}
+	}
+	der, err := x509.CreateCertificateRequest(rand.Reader, tmpl, key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return base64.RawURLEncoding.EncodeToString(der)
+	return der
 }
 
-// Only the rejection paths of FinalizeOrder are covered: a successful finalize starts a goroutine
-// that calls the (nil here) lego client.
+func b64CSR(der []byte) string { return base64.RawURLEncoding.EncodeToString(der) }
+
+// testCSR makes a CSR with the first name as the common name and every name in the SAN extension
+func testCSR(t *testing.T, names ...string) string {
+	t.Helper()
+	return b64CSR(csrFromOpts(t, csrOpts{cn: names[0], dns: names}))
+}
+
+// readyOrder creates an order for the domains with every authz valid, and moves it to ready
+func (ac *ACMEController) readyOrder(t *testing.T, acc []byte, domains ...string) *db.DBOrder {
+	t.Helper()
+
+	order := ac.newTestOrder(t, acc, domains...)
+	for _, id := range order.AuthzIDs {
+		ac.markAuthzValid(t, id)
+	}
+	got, err := ac.GetOrder([]byte(order.ID), acc)
+	if err != nil || got.Status != dtos.OrderStatusReady {
+		t.Fatalf("order should be ready: %+v, %v", got, err)
+	}
+	return got
+}
+
+func TestValidateCSRForOrder(t *testing.T) {
+	order := &db.DBOrder{Identifiers: []db.DBOrderIdentifier{{Type: "dns", Value: "a.example.com"}, {Type: "dns", Value: "b.example.com"}}}
+
+	parse := func(o csrOpts) *x509.CertificateRequest {
+		csr, err := x509.ParseCertificateRequest(csrFromOpts(t, o))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return csr
+	}
+
+	tests := []struct {
+		name    string
+		csr     csrOpts
+		wantErr bool
+	}{
+		{"SAN only", csrOpts{dns: []string{"a.example.com", "b.example.com"}}, false},
+		{"SAN only, other order", csrOpts{dns: []string{"b.example.com", "a.example.com"}}, false},
+		{"SAN and CN", csrOpts{cn: "a.example.com", dns: []string{"a.example.com", "b.example.com"}}, false},
+		{"CN is the second name", csrOpts{cn: "b.example.com", dns: []string{"a.example.com", "b.example.com"}}, false},
+		{"CN covers one name, SAN the other", csrOpts{cn: "a.example.com", dns: []string{"b.example.com"}}, false},
+		{"case differences", csrOpts{dns: []string{"A.Example.COM", "b.EXAMPLE.com"}}, false},
+		{"duplicate SAN entries", csrOpts{dns: []string{"a.example.com", "a.example.com", "b.example.com"}}, false},
+
+		{"missing a name", csrOpts{dns: []string{"a.example.com"}}, true},
+		{"extra name", csrOpts{dns: []string{"a.example.com", "b.example.com", "c.example.com"}}, true},
+		{"completely different name", csrOpts{dns: []string{"evil.example.org"}}, true},
+		{"right names plus extra CN", csrOpts{cn: "evil.example.org", dns: []string{"a.example.com", "b.example.com"}}, true},
+		{"CN only, missing a name", csrOpts{cn: "a.example.com"}, true},
+		{"no names at all", csrOpts{}, true},
+		{"subdomain of requested name", csrOpts{dns: []string{"x.a.example.com", "b.example.com"}}, true},
+		{"wildcard where a name was requested", csrOpts{dns: []string{"*.example.com", "b.example.com"}}, true},
+		{"right names plus IP", csrOpts{dns: []string{"a.example.com", "b.example.com"}, ips: []net.IP{net.ParseIP("10.0.0.1")}}, true},
+		{"right names plus email", csrOpts{dns: []string{"a.example.com", "b.example.com"}, email: []string{"a@example.com"}}, true},
+		{"trailing dot differs", csrOpts{dns: []string{"a.example.com.", "b.example.com"}}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateCSRForOrder(parse(tt.csr), order)
+			if !tt.wantErr {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			expectProblem(t, err, badCSRErr, http.StatusBadRequest)
+		})
+	}
+
+	t.Run("wildcard order accepts the same wildcard", func(t *testing.T) {
+		wild := &db.DBOrder{Identifiers: []db.DBOrderIdentifier{{Type: "dns", Value: "*.example.com"}}}
+		if err := validateCSRForOrder(parse(csrOpts{dns: []string{"*.example.com"}}), wild); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestParseCSR(t *testing.T) {
+	valid := csrFromOpts(t, csrOpts{dns: []string{"a.example.com"}})
+
+	if _, err := parseCSR(b64CSR(valid)); err != nil {
+		t.Fatalf("valid CSR rejected: %v", err)
+	}
+
+	// The last bytes of the DER are the signature, so flipping one leaves a parseable CSR with a bad signature
+	tampered := append([]byte(nil), valid...)
+	tampered[len(tampered)-1] ^= 0xff
+
+	tests := map[string]string{
+		"not base64":        "!!!",
+		"padded base64":     b64CSR(valid) + "==",
+		"empty":             "",
+		"not der":           b64CSR([]byte("not a csr")),
+		"invalid signature": b64CSR(tampered),
+		"trailing data":     b64CSR(append(append([]byte(nil), valid...), 0x00)),
+	}
+	for name, in := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := parseCSR(in)
+			expectProblem(t, err, badCSRErr, http.StatusBadRequest)
+		})
+	}
+}
+
+// Only rejections are covered here: a successful finalize starts a goroutine that calls the (nil here) lego client.
 func TestFinalizeOrderRejections(t *testing.T) {
 	ac := newTestCtrl(t)
 	owner := ac.newTestAccount(t)
 	other := ac.newTestAccount(t)
-	order := ac.newTestOrder(t, owner, "a.example.com")
+	order := ac.readyOrder(t, owner, "a.example.com")
 	validCSR := testCSR(t, "a.example.com")
 
 	tests := []struct {
@@ -385,18 +500,143 @@ func TestFinalizeOrderRejections(t *testing.T) {
 		{"csr not base64", order.ID, owner, "!!!", badCSRErr, http.StatusBadRequest},
 		{"csr with padding", order.ID, owner, validCSR + "==", badCSRErr, http.StatusBadRequest},
 		{"csr empty", order.ID, owner, "", badCSRErr, http.StatusBadRequest},
-		{"csr not der", order.ID, owner, base64.RawURLEncoding.EncodeToString([]byte("not a csr")), badCSRErr, http.StatusBadRequest},
-		{"authz not valid", order.ID, owner, validCSR, orderNotReadyErr, http.StatusForbidden},
+		{"csr not der", order.ID, owner, b64CSR([]byte("not a csr")), badCSRErr, http.StatusBadRequest},
+		{"csr for a different name", order.ID, owner, testCSR(t, "evil.example.org"), badCSRErr, http.StatusBadRequest},
+		{"csr with an extra name", order.ID, owner, testCSR(t, "a.example.com", "b.example.com"), badCSRErr, http.StatusBadRequest},
+		{"csr with no names", order.ID, owner, b64CSR(csrFromOpts(t, csrOpts{})), badCSRErr, http.StatusBadRequest},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := ac.FinalizeOrder([]byte(tt.orderID), dtos.OrderFinalizeRequestDTO{CSRB64: tt.csr}, tt.account)
 			expectProblem(t, err, tt.wantType, tt.wantStatus)
 
+			// RFC 8555 7.4: after a badCSR the order stays ready so the client can retry
 			got, _ := ac.db.GetOrder([]byte(order.ID))
-			if got.Status != dtos.OrderStatusPending {
+			if got.Status != dtos.OrderStatusReady {
 				t.Errorf("rejected finalize changed order status to %s", got.Status)
 			}
 		})
+	}
+}
+
+// RFC 8555 7.4: finalizing an order that isn't ready is a 403 orderNotReady. Without this check a second
+// finalize would start another issuance and an expired order could still be issued.
+func TestFinalizeOrderRequiresReady(t *testing.T) {
+	validCSR := testCSR(t, "a.example.com")
+
+	t.Run("authz still pending", func(t *testing.T) {
+		ac := newTestCtrl(t)
+		acc := ac.newTestAccount(t)
+		order := ac.newTestOrder(t, acc, "a.example.com")
+
+		_, err := ac.FinalizeOrder([]byte(order.ID), dtos.OrderFinalizeRequestDTO{CSRB64: validCSR}, acc)
+		expectProblem(t, err, orderNotReadyErr, http.StatusForbidden)
+	})
+
+	// All authzs are valid in every case below, so only the order's status can stop the finalize
+	for _, status := range []string{dtos.OrderStatusProcessing, dtos.OrderStatusValid, dtos.OrderStatusInvalid, dtos.OrderStatusExpired} {
+		t.Run("status "+status, func(t *testing.T) {
+			ac := newTestCtrl(t)
+			acc := ac.newTestAccount(t)
+			order := ac.readyOrder(t, acc, "a.example.com")
+			ac.db.UpdateOrder([]byte(order.ID), func(o *db.DBOrder) error { o.Status = status; return nil })
+
+			_, err := ac.FinalizeOrder([]byte(order.ID), dtos.OrderFinalizeRequestDTO{CSRB64: validCSR}, acc)
+			expectProblem(t, err, orderNotReadyErr, http.StatusForbidden)
+
+			if got, _ := ac.db.GetOrder([]byte(order.ID)); got.Status != status {
+				t.Errorf("status changed from %s to %s", status, got.Status)
+			}
+		})
+	}
+
+	t.Run("ready order that has since expired", func(t *testing.T) {
+		ac := newTestCtrl(t)
+		acc := ac.newTestAccount(t)
+		order := ac.readyOrder(t, acc, "a.example.com")
+		ac.db.UpdateOrder([]byte(order.ID), func(o *db.DBOrder) error { o.Expires = time.Now().Add(-time.Minute).Unix(); return nil })
+
+		_, err := ac.FinalizeOrder([]byte(order.ID), dtos.OrderFinalizeRequestDTO{CSRB64: validCSR}, acc)
+		expectProblem(t, err, orderNotReadyErr, http.StatusForbidden)
+
+		if got, _ := ac.db.GetOrder([]byte(order.ID)); got.Status != dtos.OrderStatusExpired {
+			t.Errorf("status = %s, want expired", got.Status)
+		}
+	})
+
+	t.Run("not ready is reported before the csr is looked at", func(t *testing.T) {
+		ac := newTestCtrl(t)
+		acc := ac.newTestAccount(t)
+		order := ac.newTestOrder(t, acc, "a.example.com")
+
+		_, err := ac.FinalizeOrder([]byte(order.ID), dtos.OrderFinalizeRequestDTO{CSRB64: "!!!"}, acc)
+		expectProblem(t, err, orderNotReadyErr, http.StatusForbidden)
+	})
+}
+
+func TestMarkOrderProcessingIsExclusive(t *testing.T) {
+	ac := newTestCtrl(t)
+	acc := ac.newTestAccount(t)
+	order := ac.readyOrder(t, acc, "a.example.com")
+
+	const workers = 20
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	winners, notReady := 0, 0
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := ac.markOrderProcessing([]byte(order.ID))
+
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err == nil:
+				winners++
+			case problemOf(t, err).Type == orderNotReadyErr:
+				notReady++
+			default:
+				t.Errorf("unexpected error: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if winners != 1 || notReady != workers-1 {
+		t.Errorf("winners=%d notReady=%d, want exactly 1 winner and %d orderNotReady", winners, notReady, workers-1)
+	}
+	if got, _ := ac.db.GetOrder([]byte(order.ID)); got.Status != dtos.OrderStatusProcessing {
+		t.Errorf("status = %s", got.Status)
+	}
+}
+
+func TestMarkOrderProcessingMissingOrder(t *testing.T) {
+	ac := newTestCtrl(t)
+	if _, err := ac.markOrderProcessing([]byte("missing")); err == nil {
+		t.Fatal("expected an error")
+	}
+}
+
+func TestReadyOrderExpires(t *testing.T) {
+	ac := newTestCtrl(t)
+	acc := ac.newTestAccount(t)
+	order := ac.readyOrder(t, acc, "a.example.com")
+
+	// Still within its lifetime: stays ready
+	if err := ac.recomputeOrderStatus([]byte(order.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := ac.db.GetOrder([]byte(order.ID)); got.Status != dtos.OrderStatusReady {
+		t.Fatalf("status = %s, want ready", got.Status)
+	}
+
+	ac.db.UpdateOrder([]byte(order.ID), func(o *db.DBOrder) error { o.Expires = time.Now().Add(-time.Second).Unix(); return nil })
+	if err := ac.recomputeOrderStatus([]byte(order.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := ac.db.GetOrder([]byte(order.ID)); got.Status != dtos.OrderStatusExpired {
+		t.Fatalf("status = %s, want expired", got.Status)
 	}
 }
