@@ -8,6 +8,8 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"net/http"
+	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -267,14 +269,64 @@ func TestGetOrdersByAccountID(t *testing.T) {
 	_, err = ac.GetOrdersByAccountID(acc, other)
 	expectUnauthorized(t, err)
 
-	order := ac.newTestOrder(t, acc, "a.example.com")
+	first := ac.newTestOrder(t, acc, "a.example.com")
+	second := ac.newTestOrder(t, acc, "b.example.com")
+	otherOrder := ac.newTestOrder(t, other, "c.example.com")
+
+	want := []string{ac.linkCtrl.OrderPath(first.ID).Abs(), ac.linkCtrl.OrderPath(second.ID).Abs()}
 	orders, err = ac.GetOrdersByAccountID(acc, acc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := ac.linkCtrl.OrderPath(order.ID).Abs()
-	if len(orders) != 1 || orders[0] != want {
-		t.Skipf("KNOWN ISSUE: orders list is %v after creating an order, want [%s]; NewOrder never appends to the account's Orders", orders, want)
+	if !reflect.DeepEqual(orders, want) {
+		t.Errorf("orders = %v, want %v", orders, want)
+	}
+
+	// Each account only sees its own orders
+	orders, err = ac.GetOrdersByAccountID(other, other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{ac.linkCtrl.OrderPath(otherOrder.ID).Abs()}; !reflect.DeepEqual(orders, want) {
+		t.Errorf("other account's orders = %v, want %v", orders, want)
+	}
+}
+
+func TestConcurrentOrdersAreAllListed(t *testing.T) {
+	ac := newTestCtrl(t)
+	acc := ac.newTestAccount(t)
+
+	const n = 20
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := ac.NewOrder(dtos.OrderCreateRequestDTO{Identifiers: []dtos.OrderIdentifierDTO{{Type: "dns", Value: "a.example.com"}}}, acc); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	orders, err := ac.GetOrdersByAccountID(acc, acc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orders) != n {
+		t.Errorf("got %d orders listed, want %d (updates were lost)", len(orders), n)
+	}
+}
+
+func TestRejectedOrdersAreNotListed(t *testing.T) {
+	ac := newTestCtrl(t)
+	acc := ac.newTestAccount(t)
+
+	if _, err := ac.NewOrder(dtos.OrderCreateRequestDTO{Identifiers: []dtos.OrderIdentifierDTO{{Type: "ip", Value: "1.2.3.4"}}}, acc); err == nil {
+		t.Fatal("expected rejection")
+	}
+	if orders, _ := ac.GetOrdersByAccountID(acc, acc); len(orders) != 0 {
+		t.Errorf("rejected order was listed: %v", orders)
 	}
 }
 

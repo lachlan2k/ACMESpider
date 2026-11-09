@@ -129,6 +129,15 @@ func (ac ACMEController) NewOrder(payload dtos.OrderCreateRequestDTO, accountID 
 	if err != nil {
 		return nil, InternalErrorProblem(err)
 	}
+
+	_, err = ac.db.UpdateAccount(accountID, func(acc *db.DBAccount) error {
+		acc.Orders = append(acc.Orders, dbOrder.ID)
+		return nil
+	})
+	if err != nil {
+		return nil, InternalErrorProblem(fmt.Errorf("failed to add order to account: %v", err))
+	}
+
 	return &dbOrder, nil
 }
 
