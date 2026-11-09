@@ -244,7 +244,16 @@ func (b BoltDB) DeleteAccount(accountID []byte) error {
 		if err != nil {
 			return err
 		}
-		return bucket.Delete(accountID)
+		if err := bucket.Delete(accountID); err != nil {
+			return err
+		}
+
+		// Without the key, the account's KID can no longer authenticate requests
+		keyBucket, err := boltGetBucket(tx, accountKeysBucketName)
+		if err != nil {
+			return err
+		}
+		return keyBucket.Delete(accountID)
 	})
 }
 
