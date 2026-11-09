@@ -20,7 +20,9 @@ func (ac ACMEController) splitChallengeID(challID []byte) (authzID []byte, chall
 	authzID = challID[:len(challID)-2]
 	encodedChallengeIndex := challID[len(challID)-2:]
 
-	challengeIndex64, err := strconv.ParseInt(string(encodedChallengeIndex), 16, 32)
+	// ParseUint rather than ParseInt: a signed index like "-1" would pass the upper bounds check
+	// later on and then panic when indexing the challenges slice
+	challengeIndex64, err := strconv.ParseUint(string(encodedChallengeIndex), 16, 8)
 	if err != nil {
 		err = MalformedProblem("Invalid challenge ID")
 		return
