@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/go-jose/go-jose/v3"
+	"github.com/go-jose/go-jose/v4"
 	"github.com/lachlan2k/acmespider/internal/acme_controller"
 	"github.com/lachlan2k/acmespider/internal/links"
 )
@@ -86,6 +86,12 @@ const (
 	joseBadSigAlgType    = "urn:ietf:params:acme:error:badSignatureAlgorithm"
 	joseBadPublicKeyType = "urn:ietf:params:acme:error:badPublicKey"
 )
+
+// every algorithm go-jose knows, for tests that parse JWSs we deliberately don't accept
+var allTestAlgorithms = []jose.SignatureAlgorithm{
+	jose.EdDSA, jose.HS256, jose.HS384, jose.HS512, jose.RS256, jose.RS384, jose.RS512,
+	jose.ES256, jose.ES384, jose.ES512, jose.PS256, jose.PS384, jose.PS512,
+}
 
 func requireProblem(t *testing.T, err error, wantType string) *acme_controller.ProblemDetails {
 	t.Helper()
@@ -226,7 +232,7 @@ func TestBadSignatureAlgorithmListsSupportedAlgorithms(t *testing.T) {
 	_, _, err := extractJWS([]byte(jwsWithHeader(`{"alg":"HS256"}`)))
 	pd := requireProblem(t, err, joseBadSigAlgType)
 
-	for _, want := range []string{"ES256", "EdDSA"} {
+	for _, want := range []jose.SignatureAlgorithm{jose.ES256, jose.EdDSA} {
 		found := false
 		for _, got := range pd.Algorithms {
 			found = found || got == want
@@ -236,7 +242,7 @@ func TestBadSignatureAlgorithmListsSupportedAlgorithms(t *testing.T) {
 		}
 	}
 	for _, got := range pd.Algorithms {
-		if strings.HasPrefix(got, "HS") || got == "none" {
+		if strings.HasPrefix(string(got), "HS") || got == "none" {
 			t.Errorf("algorithms must not advertise %s", got)
 		}
 	}
@@ -359,7 +365,7 @@ func TestVerifyFailuresAreCryptoFailures(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			jws, err := jose.ParseSigned(tt.body)
+			jws, err := jose.ParseSigned(tt.body, allTestAlgorithms)
 			if err != nil {
 				t.Fatalf("test input should parse: %v", err)
 			}
@@ -388,7 +394,7 @@ func TestVerifyRejectsUnknownCriticalHeaders(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			body := signES256(t, key, tt.header, "")
-			jws, err := jose.ParseSigned(body)
+			jws, err := jose.ParseSigned(body, allTestAlgorithms)
 			if err != nil {
 				if !tt.wantErr {
 					t.Fatalf("unexpected parse error: %v", err)
@@ -399,8 +405,10 @@ func TestVerifyRejectsUnknownCriticalHeaders(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("wantErr %v, got %v", tt.wantErr, err)
 			}
-			if err != nil && !errors.Is(err, jose.ErrCryptoFailure) {
-				t.Errorf("rejection should be an ErrCryptoFailure so it maps to 403 rather than 500, got %v", err)
+			// Whichever it is, validateJWSAndExtractPayload has to recognise it as the client's fault: anything else
+			// becomes a 500. go-jose v3 reported this as a crypto failure; v4 has its own error.
+			if err != nil && !errors.Is(err, jose.ErrCryptoFailure) && !errors.Is(err, jose.ErrUnsupportedCriticalHeader) {
+				t.Errorf("rejection should be a client error the middleware recognises, got %v", err)
 			}
 		})
 	}

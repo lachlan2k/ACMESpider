@@ -1,6 +1,6 @@
 package db
 
-import "github.com/go-jose/go-jose/v3"
+import "github.com/go-jose/go-jose/v4"
 
 type DB interface {
 	Seed() error

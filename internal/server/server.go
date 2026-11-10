@@ -18,8 +18,8 @@ import (
 	"strings"
 
 	"github.com/caddyserver/certmagic"
-	"github.com/go-acme/lego/challenge"
 	"github.com/go-acme/lego/v4/certcrypto"
+	"github.com/go-acme/lego/v4/challenge"
 	"github.com/go-acme/lego/v4/challenge/dns01"
 	"github.com/go-acme/lego/v4/lego"
 	dnsProviders "github.com/go-acme/lego/v4/providers/dns"
@@ -29,7 +29,7 @@ import (
 	"github.com/lachlan2k/acmespider/internal/handlers"
 	"github.com/lachlan2k/acmespider/internal/links"
 	"github.com/lachlan2k/acmespider/internal/nonce"
-	mhAcme "github.com/mholt/acmez/acme"
+	mhAcme "github.com/mholt/acmez/v3/acme"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"

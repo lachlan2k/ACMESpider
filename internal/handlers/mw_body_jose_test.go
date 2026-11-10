@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/go-jose/go-jose/v3"
+	"github.com/go-jose/go-jose/v4"
 	"github.com/labstack/echo/v4"
 	"github.com/lachlan2k/acmespider/internal/acme_controller"
 	"github.com/lachlan2k/acmespider/internal/db"
@@ -593,6 +593,22 @@ func TestValidateJWS_URL(t *testing.T) {
 			t.Fatalf("got %v", err)
 		}
 	})
+}
+
+// An attacker-controlled header must never be able to cause an internal server error
+func TestValidateJWS_UnsupportedCriticalHeader(t *testing.T) {
+	e := newJoseEnv(t)
+
+	for name, crit := range map[string]string{
+		"unknown extension":       `"crit":["x-unknown"],"x-unknown":1`,
+		"extension not in header": `"crit":["x-unknown"]`,
+		"registered parameter":    `"crit":["alg"]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			header := `{"alg":"ES256","kid":"` + e.accKID + `","nonce":"` + e.nonce(t) + `","url":"` + e.baseURL + `/new-account",` + crit + `}`
+			expectMalformed(t, e.runJWS(signES256(t, e.accKey, header, ""), true, false))
+		})
+	}
 }
 
 func TestValidateJWS_BodyReadFailure(t *testing.T) {

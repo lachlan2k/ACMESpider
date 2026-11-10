@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/go-jose/go-jose/v3"
+	"github.com/go-jose/go-jose/v4"
 	"github.com/labstack/echo/v4"
 	"github.com/lachlan2k/acmespider/internal/acme_controller"
 	"github.com/lachlan2k/acmespider/internal/db"

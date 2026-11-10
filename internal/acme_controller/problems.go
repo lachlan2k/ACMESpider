@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/go-jose/go-jose/v4"
 	"github.com/google/uuid"
 )
 
@@ -35,7 +36,7 @@ type ProblemDetails struct {
 	HTTPStatus  int                          `json:"status,omitempty"`
 	Identifier  *IdentifierForProblemDetails `json:"identifier,omitempty"`
 	Subproblems []ProblemDetails             `json:"subproblems,omitempty"`
-	Algorithms  []string                     `json:"algorithms,omitempty"`
+	Algorithms  []jose.SignatureAlgorithm    `json:"algorithms,omitempty"`
 	wrapped     error
 	wrappedId   string
 }
@@ -228,7 +229,7 @@ func RejectedIdentifierProblem(ident IdentifierForProblemDetails, detail string)
 	}
 }
 
-func BadSignatureAlgorithmProblem(detail string, supportedAlgs []string) *ProblemDetails {
+func BadSignatureAlgorithmProblem(detail string, supportedAlgs []jose.SignatureAlgorithm) *ProblemDetails {
 	return &ProblemDetails{
 		Type:       badSignatureAlgErr,
 		Detail:     detail,

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/go-jose/go-jose/v3"
+	"github.com/go-jose/go-jose/v4"
 	"github.com/labstack/echo/v4"
 	"github.com/lachlan2k/acmespider/internal/acme_controller"
 	log "github.com/sirupsen/logrus"
@@ -153,6 +153,10 @@ func (h Handlers) validateJWSAndExtractPayload(next echo.HandlerFunc, c echo.Con
 	if err != nil {
 		if errors.Is(err, jose.ErrCryptoFailure) {
 			return acme_controller.UnauthorizedProblem("Invalid JWS signature")
+		} else if errors.Is(err, jose.ErrUnsupportedCriticalHeader) {
+			// RFC 7515 4.1.11: a JWS with a critical header we don't understand has to be rejected. It's the
+			// client's doing, so not a 500 (go-jose v3 reported this as a crypto failure, v4 has its own error).
+			return acme_controller.MalformedProblem("JWS marked a header as critical that isn't supported")
 		} else {
 			return acme_controller.InternalErrorProblem(err)
 		}

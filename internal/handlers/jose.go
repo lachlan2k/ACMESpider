@@ -3,17 +3,18 @@ package handlers
 import (
 	"crypto/rsa"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
-	"github.com/go-jose/go-jose/v3"
+	"github.com/go-jose/go-jose/v4"
 	"github.com/lachlan2k/acmespider/internal/acme_controller"
 	log "github.com/sirupsen/logrus"
 )
 
 const minRSAKeySize = 2048 / 8
 
-var supportedSigningAlgorithms = []string{"ES256", "ES384", "ES512", "EdDSA", "RS256", "RS384", "RS512"}
+var supportedSigningAlgorithms = []jose.SignatureAlgorithm{jose.ES256, jose.ES384, jose.ES512, jose.EdDSA, jose.RS256, jose.RS384, jose.RS512}
 
 func checkJWKAlgorithmValidForAccount(alg string, key *jose.JSONWebKey) error {
 	switch jose.SignatureAlgorithm(alg) {
@@ -74,9 +75,19 @@ func extractJWS(requestBody []byte) (*jose.JSONWebSignature, *jose.Signature, er
 		return nil, nil, acme_controller.MalformedProblem("JWS contained multiple signatures which is not allowed")
 	}
 
-	jws, err := jose.ParseSigned(string(requestBody))
+	jws, err := jose.ParseSigned(string(requestBody), supportedSigningAlgorithms)
 	if err != nil {
 		log.WithError(err).Debug("failed to parse jose jws")
+
+		// go-jose enforces the algorithm list itself, so the algorithm check below never sees these
+		var unexpectedAlg *jose.ErrUnexpectedSignatureAlgorithm
+		if errors.As(err, &unexpectedAlg) {
+			if unexpectedAlg.Got == "" {
+				return nil, nil, acme_controller.MalformedProblem("JWS protected header did not contain an algorithm")
+			}
+			// Includes "none" and the MAC algorithms, which RFC 8555 6.2 forbids
+			return nil, nil, acme_controller.BadSignatureAlgorithmProblem(fmt.Sprintf("Algorithm %q is not supported", unexpectedAlg.Got), supportedSigningAlgorithms)
+		}
 		return nil, nil, acme_controller.MalformedProblem("JWS invalid")
 	}
 
