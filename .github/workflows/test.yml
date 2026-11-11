@@ -1,0 +1,28 @@
+name: Test
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Vet and test
+        run: go vet ./... && go test ./...
+
+      # fastdns is a lego alias, so this also covers the alias lookup in gendns
+      - name: Single DNS provider build
+        run: |
+          go run ./internal/cmd/gendns fastdns
+          go build -tags single_dns_provider -o /dev/null ./cmd

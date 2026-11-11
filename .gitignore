@@ -5,3 +5,4 @@ acmespider.db
 main
 .env
 rfc8555.txt
+internal/server/dnsprovider_select.go

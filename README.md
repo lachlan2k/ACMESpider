@@ -63,6 +63,30 @@ Variable | Description | Default
 `ACMESPIDER_ACME_CA_DIRECTORY` | URL of the ACME provider | `https://acme-v02.api.letsencrypt.org/directory`
 `ACMESPIDER_PUBLIC_RESOLVERS` | Public DNS servers to use when internally checking the DNS-01 challenge (comma-separated) | `1.1.1.1,8.8.8.8`
 
+### Single DNS Provider Build
+
+By default, ACMESpider includes all DNS providers supported by Lego. To build ACMESpider for one
+specific DNS provider only, which shrinks the binary from about 90 MB (amd64) to about 20 MB
+(`ionos` example), pass the provider's code as listed in the [Lego
+documentation](https://go-acme.github.io/lego/dns/), for example `ionos`:
+
+```sh
+docker build --build-arg DNS_PROVIDER=ionos -t acmespider:ionos .
+```
+
+Or without Docker:
+
+```sh
+go run ./internal/cmd/gendns ionos
+go build -tags single_dns_provider -o acmespider cmd/main.go
+```
+
+(adding `-ldflags="-s -w"` to `go build` strips debug information and shrinks the binary further, to
+about 15 MB)
+
+The Docker image defaults `ACMESPIDER_DNS_PROVIDER` to the build argument. Without Docker it is
+still required and must name the provider the binary was built for.
+
 ## Client Configuration
 
 Most ACME clients have a configuration option such as "ACME CA", "ACME Server", etc. to use a custom ACME server.
