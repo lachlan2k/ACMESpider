@@ -22,7 +22,6 @@ import (
 	"github.com/go-acme/lego/v4/challenge"
 	"github.com/go-acme/lego/v4/challenge/dns01"
 	"github.com/go-acme/lego/v4/lego"
-	dnsProviders "github.com/go-acme/lego/v4/providers/dns"
 	"github.com/go-acme/lego/v4/registration"
 	"github.com/lachlan2k/acmespider/internal/acme_controller"
 	"github.com/lachlan2k/acmespider/internal/db"
@@ -128,7 +127,7 @@ func Listen(conf Config) error {
 		return err
 	}
 
-	prov, err := dnsProviders.NewDNSChallengeProviderByName(conf.DNSProvider)
+	prov, err := newDNSProvider(conf.DNSProvider)
 	if err != nil {
 		return err
 	}
